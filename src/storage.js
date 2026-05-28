@@ -8,12 +8,12 @@ const CONFIG_VERSION = 1;
 const DEFAULT_CONFIG = {
     configVersion: CONFIG_VERSION,
     onboarded: false,
-    layout: 'normal'
+    layout: 'normal',
 };
 
 const DEFAULT_CREDENTIALS = {
     apiKey: '',
-    groqApiKey: ''
+    groqApiKey: '',
 };
 
 const DEFAULT_PREFERENCES = {
@@ -35,7 +35,7 @@ const DEFAULT_PREFERENCES = {
 const DEFAULT_KEYBINDS = null; // null means use system defaults
 
 const DEFAULT_LIMITS = {
-    data: [] // Array of { date: 'YYYY-MM-DD', flash: { count }, flashLite: { count }, groq: { 'qwen3-32b': { chars, limit }, 'gpt-oss-120b': { chars, limit }, 'gpt-oss-20b': { chars, limit } }, gemini: { 'gemma-3-27b-it': { chars } } }
+    data: [], // Array of { date: 'YYYY-MM-DD', flash: { count }, flashLite: { count }, groq: { 'qwen3-32b': { chars, limit }, 'gpt-oss-120b': { chars, limit }, 'gpt-oss-20b': { chars, limit }, 'kimi-k2-instruct': { chars, limit } }, gemini: { 'gemini-2.5-flash-lite': { chars } } }
 };
 
 // Get the config directory path based on OS
@@ -253,55 +253,8 @@ function getTodayLimits() {
     const today = getTodayDateString();
 
     // Find today's entry
-    const todayEntry = limits.data.find(entry => entry.date === today);
-
-    if (todayEntry) {
-        // ensure new fields exist
-        if(!todayEntry.groq) {
-            todayEntry.groq = {
-                'qwen3-32b': { chars: 0, limit: 1500000 },
-                'gpt-oss-120b': { chars: 0, limit: 600000 },
-                'gpt-oss-20b': { chars: 0, limit: 600000 },
-                'kimi-k2-instruct': { chars: 0, limit: 600000 }
-            };
-        }
-        if(!todayEntry.gemini) {
-            todayEntry.gemini = {
-                'gemma-3-27b-it': { chars: 0 }
-            };
-        }
-        setLimits(limits);
-        return todayEntry;
-    }
-
-    // No entry for today - clean old entries and create new one
-    limits.data = limits.data.filter(entry => entry.date === today);
-    const newEntry = {
-        date: today,
-        flash: { count: 0 },
-        flashLite: { count: 0 },
-        groq: {
-            'qwen3-32b': { chars: 0, limit: 1500000 },
-            'gpt-oss-120b': { chars: 0, limit: 600000 },
-            'gpt-oss-20b': { chars: 0, limit: 600000 },
-            'kimi-k2-instruct': { chars: 0, limit: 600000 }
-        },
-        gemini: {
-            'gemma-3-27b-it': { chars: 0 }
-        }
-    };
-    limits.data.push(newEntry);
-    setLimits(limits);
-
-    return newEntry;
-}
-
-function incrementLimitCount(model) {
-    const limits = getLimits();
-    const today = getTodayDateString();
-
-    // Find or create today's entry
     let todayEntry = limits.data.find(entry => entry.date === today);
+    let modified = false;
 
     if (!todayEntry) {
         // Clean old entries and create new one
@@ -309,13 +262,89 @@ function incrementLimitCount(model) {
         todayEntry = {
             date: today,
             flash: { count: 0 },
-            flashLite: { count: 0 }
+            flashLite: { count: 0 },
+            groq: {
+                'qwen3-32b': { chars: 0, limit: 1500000 },
+                'gpt-oss-120b': { chars: 0, limit: 600000 },
+                'gpt-oss-20b': { chars: 0, limit: 600000 },
+                'kimi-k2-instruct': { chars: 0, limit: 600000 },
+            },
+            gemini: {
+                'gemini-2.5-flash-lite': { chars: 0 },
+            },
         };
         limits.data.push(todayEntry);
+        modified = true;
     } else {
-        // Clean old entries, keep only today
+        // Clean old entries, keep only today's date
         limits.data = limits.data.filter(entry => entry.date === today);
+
+        // Ensure flash / flashLite fields exist
+        if (!todayEntry.flash) {
+            todayEntry.flash = { count: 0 };
+            modified = true;
+        }
+        if (!todayEntry.flashLite) {
+            todayEntry.flashLite = { count: 0 };
+            modified = true;
+        }
+
+        // Ensure groq field exists and has all models
+        if (!todayEntry.groq) {
+            todayEntry.groq = {
+                'qwen3-32b': { chars: 0, limit: 1500000 },
+                'gpt-oss-120b': { chars: 0, limit: 600000 },
+                'gpt-oss-20b': { chars: 0, limit: 600000 },
+                'kimi-k2-instruct': { chars: 0, limit: 600000 },
+            };
+            modified = true;
+        } else {
+            const expectedGroqModels = {
+                'qwen3-32b': 1500000,
+                'gpt-oss-120b': 600000,
+                'gpt-oss-20b': 600000,
+                'kimi-k2-instruct': 600000,
+            };
+            for (const [model, limitVal] of Object.entries(expectedGroqModels)) {
+                if (!todayEntry.groq[model]) {
+                    todayEntry.groq[model] = { chars: 0, limit: limitVal };
+                    modified = true;
+                }
+            }
+        }
+
+        // Ensure gemini field exists and has gemini-2.5-flash-lite, and clean up any gemma keys
+        if (!todayEntry.gemini) {
+            todayEntry.gemini = {
+                'gemini-2.5-flash-lite': { chars: 0 },
+            };
+            modified = true;
+        } else {
+            if (!todayEntry.gemini['gemini-2.5-flash-lite']) {
+                todayEntry.gemini['gemini-2.5-flash-lite'] = { chars: 0 };
+                modified = true;
+            }
+            // Clean up deprecated gemma keys
+            for (const key of Object.keys(todayEntry.gemini)) {
+                if (key.includes('gemma')) {
+                    delete todayEntry.gemini[key];
+                    modified = true;
+                }
+            }
+        }
     }
+
+    if (modified) {
+        setLimits(limits);
+    }
+    return todayEntry;
+}
+
+function incrementLimitCount(model) {
+    getTodayLimits(); // Ensure initialized and migrated
+    const limits = getLimits();
+    const today = getTodayDateString();
+    const todayEntry = limits.data.find(entry => entry.date === today);
 
     // Increment the appropriate model count
     if (model === 'gemini-2.5-flash') {
@@ -335,7 +364,7 @@ function incrementCharUsage(provider, model, charCount) {
     const today = getTodayDateString();
     const todayEntry = limits.data.find(entry => entry.date === today);
 
-    if(todayEntry[provider] && todayEntry[provider][model]) {
+    if (todayEntry[provider] && todayEntry[provider][model]) {
         todayEntry[provider][model].chars += charCount;
         setLimits(limits);
     }
@@ -399,7 +428,7 @@ function saveSession(sessionId, data) {
         customPrompt: data.customPrompt || existingSession?.customPrompt || null,
         // Conversation data
         conversationHistory: data.conversationHistory || existingSession?.conversationHistory || [],
-        screenAnalysisHistory: data.screenAnalysisHistory || existingSession?.screenAnalysisHistory || []
+        screenAnalysisHistory: data.screenAnalysisHistory || existingSession?.screenAnalysisHistory || [],
     };
     return writeJsonFile(sessionPath, sessionData);
 }
@@ -416,7 +445,8 @@ function getAllSessions() {
             return [];
         }
 
-        const files = fs.readdirSync(historyDir)
+        const files = fs
+            .readdirSync(historyDir)
             .filter(f => f.endsWith('.json'))
             .sort((a, b) => {
                 // Sort by timestamp descending (newest first)
@@ -425,22 +455,24 @@ function getAllSessions() {
                 return tsB - tsA;
             });
 
-        return files.map(file => {
-            const sessionId = file.replace('.json', '');
-            const data = readJsonFile(path.join(historyDir, file), null);
-            if (data) {
-                return {
-                    sessionId,
-                    createdAt: data.createdAt,
-                    lastUpdated: data.lastUpdated,
-                    messageCount: data.conversationHistory?.length || 0,
-                    screenAnalysisCount: data.screenAnalysisHistory?.length || 0,
-                    profile: data.profile || null,
-                    customPrompt: data.customPrompt || null
-                };
-            }
-            return null;
-        }).filter(Boolean);
+        return files
+            .map(file => {
+                const sessionId = file.replace('.json', '');
+                const data = readJsonFile(path.join(historyDir, file), null);
+                if (data) {
+                    return {
+                        sessionId,
+                        createdAt: data.createdAt,
+                        lastUpdated: data.lastUpdated,
+                        messageCount: data.conversationHistory?.length || 0,
+                        screenAnalysisCount: data.screenAnalysisHistory?.length || 0,
+                        profile: data.profile || null,
+                        customPrompt: data.customPrompt || null,
+                    };
+                }
+                return null;
+            })
+            .filter(Boolean);
     } catch (error) {
         console.error('Error reading sessions:', error.message);
         return [];
@@ -527,5 +559,5 @@ module.exports = {
     deleteAllSessions,
 
     // Clear all
-    clearAllData
+    clearAllData,
 };

@@ -16,6 +16,7 @@ function createWindow(sendToRenderer, geminiSessionRef) {
         transparent: true,
         hasShadow: false,
         alwaysOnTop: true,
+        icon: path.join(__dirname, '../assets/logo.ico'),
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false, // TODO: change to true

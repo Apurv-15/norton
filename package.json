@@ -1,8 +1,8 @@
 {
-    "name": "cheating-daddy",
-    "productName": "cheating-daddy",
+    "name": "norton-340",
+    "productName": "Norton 340",
     "version": "0.7.0",
-    "description": "cheating daddy",
+    "description": "Norton 340",
     "main": "src/index.js",
     "scripts": {
         "start": "electron-forge start",
