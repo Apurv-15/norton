@@ -586,7 +586,7 @@ export class CheatingDaddyApp extends LitElement {
 
     async handleStart() {
         const prefs = await cheatingDaddy.storage.getPreferences();
-        const providerMode = prefs.providerMode === 'cloud' ? 'byok' : (prefs.providerMode || 'byok');
+        const providerMode = prefs.providerMode || 'byok';
 
         if (providerMode === 'cloud') {
             const creds = await cheatingDaddy.storage.getCredentials();
@@ -616,6 +616,7 @@ export class CheatingDaddyApp extends LitElement {
                 return;
             }
         } else {
+            // 'byok' mode: use Gemini API key
             const apiKey = await cheatingDaddy.storage.getApiKey();
             if (!apiKey || apiKey === '') {
                 const mainView = this.shadowRoot.querySelector('main-view');

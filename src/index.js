@@ -2,6 +2,15 @@ if (require('electron-squirrel-startup')) {
     process.exit(0);
 }
 
+// Suppress EPIPE errors caused by broken stdout pipes (e.g. piped to `head`)
+// Without this, a closed pipe crashes the entire Electron main process.
+process.stdout.on('error', err => {
+    if (err.code !== 'EPIPE') throw err;
+});
+process.stderr.on('error', err => {
+    if (err.code !== 'EPIPE') throw err;
+});
+
 const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const { createWindow, updateGlobalShortcuts } = require('./utils/window');
 const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = require('./utils/gemini');
@@ -84,7 +93,6 @@ function setupStorageIpcHandlers() {
         try {
             return { success: true, data: storage.getCredentials() };
         } catch (error) {
-            console.error('Error getting credentials:', error);
             return { success: false, error: error.message };
         }
     });
@@ -133,6 +141,25 @@ function setupStorageIpcHandlers() {
             return { success: true };
         } catch (error) {
             console.error('Error setting Groq API key:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:get-deepgram-api-key', async () => {
+        try {
+            return { success: true, data: storage.getDeepgramApiKey() };
+        } catch (error) {
+            console.error('Error getting Deepgram API key:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:set-deepgram-api-key', async (event, deepgramApiKey) => {
+        try {
+            storage.setDeepgramApiKey(deepgramApiKey);
+            return { success: true };
+        } catch (error) {
+            console.error('Error setting Deepgram API key:', error);
             return { success: false, error: error.message };
         }
     });

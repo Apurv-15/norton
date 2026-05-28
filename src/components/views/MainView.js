@@ -509,6 +509,7 @@ export class MainView extends LitElement {
         _token: { state: true },
         _geminiKey: { state: true },
         _groqKey: { state: true },
+        _deepgramKey: { state: true },
         _openaiKey: { state: true },
         _tokenError: { state: true },
         _keyError: { state: true },
@@ -532,6 +533,7 @@ export class MainView extends LitElement {
         this._token = '';
         this._geminiKey = '';
         this._groqKey = '';
+        this._deepgramKey = '';
         this._openaiKey = '';
         this._tokenError = false;
         this._keyError = false;
@@ -567,6 +569,7 @@ export class MainView extends LitElement {
             this._token = creds.cloudToken || '';
             this._geminiKey = (await cheatingDaddy.storage.getApiKey().catch(() => '')) || '';
             this._groqKey = (await cheatingDaddy.storage.getGroqApiKey().catch(() => '')) || '';
+            this._deepgramKey = (await cheatingDaddy.storage.getDeepgramApiKey().catch(() => '')) || '';
             this._openaiKey = creds.openaiKey || '';
 
             // Load local AI settings
@@ -737,6 +740,13 @@ export class MainView extends LitElement {
         this.requestUpdate();
     }
 
+    async _saveDeepgramKey(val) {
+        this._deepgramKey = val;
+        this._keyError = false;
+        await cheatingDaddy.storage.setDeepgramApiKey(val);
+        this.requestUpdate();
+    }
+
     async _saveOpenaiKey(val) {
         this._openaiKey = val;
         try {
@@ -774,7 +784,7 @@ export class MainView extends LitElement {
         if (this.isInitializing) return;
 
         if (this._mode === 'byok') {
-            if (!this._geminiKey.trim()) {
+            if (!this._geminiKey.trim() && !this._deepgramKey.trim()) {
                 this._keyError = true;
                 this.requestUpdate();
                 return;
@@ -888,6 +898,20 @@ export class MainView extends LitElement {
                 />
                 <div class="form-hint">
                     <span class="link" @click=${() => this.onExternalLink('https://aistudio.google.com/apikey')}>Get Gemini key</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Deepgram API Key</label>
+                <input
+                    type="password"
+                    placeholder="Optional (for ultra-fast live transcription)"
+                    .value=${this._deepgramKey}
+                    @input=${e => this._saveDeepgramKey(e.target.value)}
+                    class=${this._keyError ? 'error' : ''}
+                />
+                <div class="form-hint">
+                    <span class="link" @click=${() => this.onExternalLink('https://console.deepgram.com/')}>Get Deepgram key</span>
                 </div>
             </div>
 

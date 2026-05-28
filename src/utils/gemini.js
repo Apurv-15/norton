@@ -1,9 +1,18 @@
 const { GoogleGenAI, Modality } = require('@google/genai');
 const { BrowserWindow, ipcMain } = require('electron');
 const { spawn } = require('child_process');
+const WebSocket = require('ws');
 const { saveDebugAudio } = require('../audioUtils');
 const { getSystemPrompt } = require('./prompts');
-const { getAvailableModel, incrementLimitCount, getApiKey, getGroqApiKey, incrementCharUsage, getModelForToday } = require('../storage');
+const {
+    getAvailableModel,
+    incrementLimitCount,
+    getApiKey,
+    getGroqApiKey,
+    getDeepgramApiKey,
+    incrementCharUsage,
+    getModelForToday,
+} = require('../storage');
 const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, isCloudActive, setOnTurnComplete } = require('./cloud');
 
 // Lazy-loaded to avoid circular dependency (localai.js imports from gemini.js)
@@ -45,6 +54,9 @@ module.exports.formatSpeakerResults = formatSpeakerResults;
 // Audio capture variables
 let systemAudioProc = null;
 let messageBuffer = '';
+let deepgramWs = null;
+let deepgramApiKey = '';
+let deepgramTranscriptionTimeout = null;
 
 // Reconnection variables
 let isUserClosing = false;
@@ -152,13 +164,9 @@ async function getEnabledTools() {
 
     // Check if Google Search is enabled (default: true)
     const googleSearchEnabled = await getStoredSetting('googleSearchEnabled', 'true');
-    console.log('Google Search enabled:', googleSearchEnabled);
 
     if (googleSearchEnabled === 'true') {
         tools.push({ googleSearch: {} });
-        console.log('Added Google Search tool');
-    } else {
-        console.log('Google Search tool disabled');
     }
 
     return tools;
@@ -201,6 +209,11 @@ async function getStoredSetting(key, defaultValue) {
 function hasGroqKey() {
     const key = getGroqApiKey();
     return key && key.trim() != '';
+}
+
+// helper to check if Deepgram mode is active
+function isDeepgramMode() {
+    return deepgramWs !== null || deepgramApiKey !== '';
 }
 
 function trimConversationHistoryForGemma(history, maxChars = 42000) {
@@ -462,21 +475,50 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                 onmessage: function (message) {
                     console.log('----------------', message);
 
-                    // Handle input transcription (what was spoken)
+                    // Handle input transcription (what was spoken in the meeting)
                     if (message.serverContent?.inputTranscription?.results) {
-                        currentTranscription += formatSpeakerResults(message.serverContent.inputTranscription.results);
+                        const partial = formatSpeakerResults(message.serverContent.inputTranscription.results);
+                        if (partial.trim()) {
+                            currentTranscription += partial;
+                            sendToRenderer('update-status', 'Transcribing...');
+                        }
                     } else if (message.serverContent?.inputTranscription?.text) {
                         const text = message.serverContent.inputTranscription.text;
                         if (text.trim() !== '') {
                             currentTranscription += text;
+                            sendToRenderer('update-status', 'Transcribing...');
                         }
                     }
 
-                    // DISABLED: Gemini's outputTranscription - using Groq for faster responses instead
-                    // if (message.serverContent?.outputTranscription?.text) { ... }
+                    // Handle direct TEXT responses from Gemini (fast path with TEXT modality)
+                    if (message.serverContent?.modelTurn?.parts) {
+                        for (const part of message.serverContent.modelTurn.parts) {
+                            if (part.text && part.text.trim()) {
+                                messageBuffer += part.text;
+                                sendToRenderer(messageBuffer === part.text ? 'new-response' : 'update-response', messageBuffer);
+                            }
+                        }
+                    }
 
                     if (message.serverContent?.generationComplete) {
-                        if (currentTranscription.trim() !== '') {
+                        // Flush any buffered Gemini TEXT response
+                        if (messageBuffer.trim()) {
+                            saveConversationTurn(currentTranscription, messageBuffer);
+                            messageBuffer = '';
+                        } else if (currentTranscription.trim() !== '') {
+                            // Gemini gave no direct answer — use Groq/Gemma for speed
+                            if (hasGroqKey()) {
+                                sendToGroq(currentTranscription);
+                            } else {
+                                sendToGemma(currentTranscription);
+                            }
+                        }
+                        currentTranscription = '';
+                    }
+
+                    if (message.serverContent?.turnComplete) {
+                        // Fallback: if transcription accumulated but generationComplete never fired
+                        if (currentTranscription.trim() !== '' && messageBuffer.trim() === '') {
                             if (hasGroqKey()) {
                                 sendToGroq(currentTranscription);
                             } else {
@@ -485,9 +527,6 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                             currentTranscription = '';
                         }
                         messageBuffer = '';
-                    }
-
-                    if (message.serverContent?.turnComplete) {
                         sendToRenderer('update-status', 'Listening...');
                     }
                 },
@@ -514,15 +553,14 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                 },
             },
             config: {
-                responseModalities: [Modality.AUDIO],
-                proactivity: { proactiveAudio: true },
-                outputAudioTranscription: {},
+                // TEXT modality: we display answers on screen, no audio playback needed
+                responseModalities: [Modality.TEXT],
                 tools: enabledTools,
-                // Enable speaker diarization
+                // Transcribe incoming meeting audio; allow single speaker (interviewer only)
                 inputAudioTranscription: {
                     enableSpeakerDiarization: true,
-                    minSpeakerCount: 2,
-                    maxSpeakerCount: 2,
+                    minSpeakerCount: 1,
+                    maxSpeakerCount: 4,
                 },
                 contextWindowCompression: { slidingWindow: {} },
                 speechConfig: { languageCode: language },
@@ -639,6 +677,110 @@ function killExistingSystemAudioDump() {
     });
 }
 
+function triggerDeepgramGroqAnswer() {
+    const textToSend = currentTranscription.trim();
+    currentTranscription = '';
+    if (textToSend) {
+        console.log('[Deepgram] Triggering answers for:', textToSend);
+        sendToRenderer('update-status', 'Thinking...');
+        if (hasGroqKey()) {
+            sendToGroq(textToSend);
+        } else {
+            sendToGemma(textToSend);
+        }
+    }
+}
+
+async function connectDeepgramWebSocket(language = 'en-US') {
+    return new Promise(resolve => {
+        try {
+            console.log('Connecting to Deepgram WebSocket...');
+            sendToRenderer('update-status', 'Connecting to Deepgram...');
+
+            const model = 'nova-2-general';
+            const langCode = language || 'en-US';
+            const url = `wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=24000&channels=1&model=${model}&language=${langCode}&interim_results=true&endpointing=400&utterance_end_ms=1000`;
+
+            deepgramWs = new WebSocket(url, {
+                headers: {
+                    Authorization: `Token ${deepgramApiKey}`,
+                },
+            });
+
+            deepgramWs.on('open', () => {
+                console.log('Deepgram WebSocket connected!');
+                sendToRenderer('update-status', 'Deepgram connected. Listening...');
+                resolve(true);
+            });
+
+            deepgramWs.on('message', data => {
+                try {
+                    const response = JSON.parse(data.toString());
+                    if (response.channel && response.channel.alternatives && response.channel.alternatives[0]) {
+                        const transcript = response.channel.alternatives[0].transcript;
+                        const isFinal = response.is_final;
+                        const speechFinal = response.speech_final;
+
+                        if (transcript.trim() !== '') {
+                            sendToRenderer('update-status', 'Transcribing: ' + transcript);
+
+                            if (isFinal) {
+                                currentTranscription += ' ' + transcript;
+
+                                if (speechFinal) {
+                                    if (deepgramTranscriptionTimeout) clearTimeout(deepgramTranscriptionTimeout);
+                                    triggerDeepgramGroqAnswer();
+                                } else {
+                                    if (deepgramTranscriptionTimeout) clearTimeout(deepgramTranscriptionTimeout);
+                                    deepgramTranscriptionTimeout = setTimeout(() => {
+                                        triggerDeepgramGroqAnswer();
+                                    }, 2500);
+                                }
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error('Error parsing Deepgram message:', e);
+                }
+            });
+
+            deepgramWs.on('error', err => {
+                console.error('Deepgram WebSocket error:', err);
+                sendToRenderer('update-status', 'Deepgram error: ' + err.message);
+                resolve(false);
+            });
+
+            deepgramWs.on('close', (code, reason) => {
+                console.log(`Deepgram WebSocket closed. Code: ${code}, Reason: ${reason}`);
+                deepgramWs = null;
+                if (!isUserClosing) {
+                    sendToRenderer('update-status', 'Deepgram disconnected. Reconnecting...');
+                    setTimeout(() => {
+                        if (deepgramApiKey) connectDeepgramWebSocket(language);
+                    }, 2000);
+                }
+            });
+        } catch (error) {
+            console.error('Failed to connect to Deepgram:', error);
+            sendToRenderer('update-status', 'Deepgram connection failed');
+            resolve(false);
+        }
+    });
+}
+
+async function initializeDeepgramSession(apiKey, customPrompt = '', profile = 'interview', language = 'en-US') {
+    deepgramApiKey = apiKey;
+    isUserClosing = false;
+
+    // Use prompts module to get current instruction
+    const googleSearchEnabled = false;
+    const systemPrompt = getSystemPrompt(profile, customPrompt, googleSearchEnabled);
+    currentSystemPrompt = systemPrompt;
+
+    initializeNewSession(profile, customPrompt);
+    return connectDeepgramWebSocket(language);
+}
+
 async function startMacOSAudioCapture(geminiSessionRef) {
     if (process.platform !== 'darwin') return false;
 
@@ -696,6 +838,8 @@ async function startMacOSAudioCapture(geminiSessionRef) {
                 sendCloudAudio(monoChunk);
             } else if (currentProviderMode === 'local') {
                 getLocalAi().processLocalAudio(monoChunk);
+            } else if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+                deepgramWs.send(monoChunk);
             } else {
                 const base64Data = monoChunk.toString('base64');
                 sendAudioToGemini(base64Data, geminiSessionRef);
@@ -735,8 +879,11 @@ function convertStereoToMono(stereoBuffer) {
     const monoBuffer = Buffer.alloc(samples * 2);
 
     for (let i = 0; i < samples; i++) {
+        // Average L + R channels so neither side is lost
         const leftSample = stereoBuffer.readInt16LE(i * 4);
-        monoBuffer.writeInt16LE(leftSample, i * 2);
+        const rightSample = stereoBuffer.readInt16LE(i * 4 + 2);
+        const mono = Math.round((leftSample + rightSample) / 2);
+        monoBuffer.writeInt16LE(mono, i * 2);
     }
 
     return monoBuffer;
@@ -792,6 +939,10 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
         const response = await ai.models.generateContentStream({
             model: model,
             contents: contents,
+            config: {
+                systemInstruction: currentSystemPrompt || 'You are a helpful assistant.',
+                temperature: 0.2,
+            },
         });
 
         // Increment count after successful call
@@ -847,6 +998,15 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
 
     ipcMain.handle('initialize-gemini', async (event, apiKey, customPrompt, profile = 'interview', language = 'en-US') => {
         currentProviderMode = 'byok';
+
+        // If Deepgram key is available, use Deepgram for transcription instead of Gemini Live!
+        const deepgramKey = getDeepgramApiKey();
+        if (deepgramKey && deepgramKey.trim() !== '') {
+            console.log('Deepgram API Key found! Connecting to Deepgram WebSocket...');
+            const success = await initializeDeepgramSession(deepgramKey, customPrompt, profile, language);
+            return success;
+        }
+
         const session = await initializeGeminiSession(apiKey, customPrompt, profile, language);
         if (session) {
             geminiSessionRef.current = session;
@@ -885,7 +1045,18 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
                 return { success: false, error: error.message };
             }
         }
-        if (!geminiSessionRef.current) return { success: false, error: 'No active Gemini session' };
+        // Deepgram mode: route browser audio (if any comes via IPC) to the Deepgram WebSocket directly
+        if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+            try {
+                const pcmBuffer = Buffer.from(data, 'base64');
+                deepgramWs.send(pcmBuffer);
+                return { success: true };
+            } catch (error) {
+                console.error('Error sending audio to Deepgram:', error);
+                return { success: false, error: error.message };
+            }
+        }
+        if (!geminiSessionRef.current) return { success: false, error: 'No active session' };
         try {
             process.stdout.write('.');
             await geminiSessionRef.current.sendRealtimeInput({
@@ -920,7 +1091,18 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
                 return { success: false, error: error.message };
             }
         }
-        if (!geminiSessionRef.current) return { success: false, error: 'No active Gemini session' };
+        // Deepgram mode: mic audio also goes to Deepgram WebSocket
+        if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+            try {
+                const pcmBuffer = Buffer.from(data, 'base64');
+                deepgramWs.send(pcmBuffer);
+                return { success: true };
+            } catch (error) {
+                console.error('Error sending mic audio to Deepgram:', error);
+                return { success: false, error: error.message };
+            }
+        }
+        if (!geminiSessionRef.current) return { success: false, error: 'No active session' };
         try {
             process.stdout.write(',');
             await geminiSessionRef.current.sendRealtimeInput({
@@ -962,7 +1144,17 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
                 return result;
             }
 
-            // Use HTTP API instead of realtime session
+            // Deepgram mode: run Gemini vision API (with the real screenshot) to analyze the image
+            if (isDeepgramMode()) {
+                const textPrompt = prompt || 'Describe what you see in this screenshot and answer any question shown.';
+                console.log('[Deepgram mode] Image received – running Gemini vision.');
+
+                // Exclusively run Gemini HTTP vision for image-based requests to avoid concurrent streaming conflicts
+                const result = await sendImageToGeminiHttp(data, textPrompt);
+                return result;
+            }
+
+            // Use Gemini HTTP API instead of realtime session
             const result = await sendImageToGeminiHttp(data, prompt);
             return result;
         } catch (error) {
@@ -997,6 +1189,26 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             }
         }
 
+        // ── Deepgram + Groq pipeline ──
+        // When Deepgram is active, bypass Gemini Live entirely.
+        // Text queries go straight to Groq for instant answers.
+        if (isDeepgramMode()) {
+            try {
+                console.log('[Deepgram mode] Text query → Groq:', text.trim());
+                sendToRenderer('update-status', 'Thinking...');
+                if (hasGroqKey()) {
+                    sendToGroq(text.trim());
+                } else {
+                    sendToGemma(text.trim());
+                }
+                return { success: true };
+            } catch (error) {
+                console.error('Error sending text via Groq:', error);
+                return { success: false, error: error.message };
+            }
+        }
+
+        // ── Gemini Live session fallback ──
         if (!geminiSessionRef.current) return { success: false, error: 'No active Gemini session' };
 
         try {
@@ -1062,6 +1274,20 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             // Set flag to prevent reconnection attempts
             isUserClosing = true;
             sessionParams = null;
+
+            // Cleanup Deepgram WebSocket
+            if (deepgramWs) {
+                try {
+                    deepgramWs.close();
+                } catch (dgErr) {
+                    console.error('Error closing Deepgram WebSocket:', dgErr);
+                }
+                deepgramWs = null;
+            }
+            if (deepgramTranscriptionTimeout) {
+                clearTimeout(deepgramTranscriptionTimeout);
+                deepgramTranscriptionTimeout = null;
+            }
 
             // Cleanup session
             if (geminiSessionRef.current) {

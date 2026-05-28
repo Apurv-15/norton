@@ -56,6 +56,13 @@ const storage = {
     async setGroqApiKey(groqApiKey) {
         return ipcRenderer.invoke('storage:set-groq-api-key', groqApiKey);
     },
+    async getDeepgramApiKey() {
+        const result = await ipcRenderer.invoke('storage:get-deepgram-api-key');
+        return result.success ? result.data : '';
+    },
+    async setDeepgramApiKey(deepgramApiKey) {
+        return ipcRenderer.invoke('storage:set-deepgram-api-key', deepgramApiKey);
+    },
 
     // Preferences
     async getPreferences() {

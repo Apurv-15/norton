@@ -33,8 +33,8 @@ module.exports = {
             name: '@electron-forge/maker-squirrel',
             config: {
                 name: 'norton_340',
-                productName: 'Norton 340',
-                shortcutName: 'Norton 340',
+                productName: 'Norton340',
+                shortcutName: 'Norton340',
                 setupIcon: 'src/assets/logo.ico',
                 createDesktopShortcut: true,
                 createStartMenuShortcut: true,
@@ -43,6 +43,9 @@ module.exports = {
         {
             name: '@electron-forge/maker-dmg',
             platforms: ['darwin'],
+            config: {
+                name: 'Norton340'
+            }
         },
         {
             name: '@reforged/maker-appimage',

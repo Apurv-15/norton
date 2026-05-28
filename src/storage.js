@@ -14,6 +14,7 @@ const DEFAULT_CONFIG = {
 const DEFAULT_CREDENTIALS = {
     apiKey: '',
     groqApiKey: '',
+    deepgramApiKey: '',
 };
 
 const DEFAULT_PREFERENCES = {
@@ -203,6 +204,14 @@ function getGroqApiKey() {
 
 function setGroqApiKey(groqApiKey) {
     return setCredentials({ groqApiKey });
+}
+
+function getDeepgramApiKey() {
+    return getCredentials().deepgramApiKey || '';
+}
+
+function setDeepgramApiKey(deepgramApiKey) {
+    return setCredentials({ deepgramApiKey });
 }
 
 // ============ PREFERENCES ============
@@ -533,6 +542,8 @@ module.exports = {
     setApiKey,
     getGroqApiKey,
     setGroqApiKey,
+    getDeepgramApiKey,
+    setDeepgramApiKey,
 
     // Preferences
     getPreferences,
