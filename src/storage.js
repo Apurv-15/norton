@@ -37,7 +37,7 @@ const DEFAULT_PREFERENCES = {
 const DEFAULT_KEYBINDS = null; // null means use system defaults
 
 const DEFAULT_LIMITS = {
-    data: [], // Array of { date: 'YYYY-MM-DD', flash: { count }, flashLite: { count }, groq: { 'qwen3-32b': { chars, limit }, 'gpt-oss-120b': { chars, limit }, 'gpt-oss-20b': { chars, limit }, 'kimi-k2-instruct': { chars, limit } }, gemini: { 'gemini-2.5-flash-lite': { chars } } }
+    data: [], // Array of { date: 'YYYY-MM-DD', flash: { count }, flashLite: { count }, groq: { 'llama-3.3-70b-versatile': { chars, limit }, 'llama-3.1-8b-instant': { chars, limit }, 'mixtral-8x7b-32768': { chars, limit }, 'gemma2-9b-it': { chars, limit } }, gemini: { 'gemini-2.5-flash-lite': { chars } } }
 };
 
 // Get the config directory path based on OS
@@ -274,10 +274,10 @@ function getTodayLimits() {
             flash: { count: 0 },
             flashLite: { count: 0 },
             groq: {
-                'qwen3-32b': { chars: 0, limit: 1500000 },
-                'gpt-oss-120b': { chars: 0, limit: 600000 },
-                'gpt-oss-20b': { chars: 0, limit: 600000 },
-                'kimi-k2-instruct': { chars: 0, limit: 600000 },
+                'llama-3.3-70b-versatile': { chars: 0, limit: 1000000 },
+                'llama-3.1-8b-instant': { chars: 0, limit: 1000000 },
+                'mixtral-8x7b-32768': { chars: 0, limit: 1000000 },
+                'gemma2-9b-it': { chars: 0, limit: 1000000 },
             },
             gemini: {
                 'gemini-2.5-flash-lite': { chars: 0 },
@@ -302,19 +302,26 @@ function getTodayLimits() {
         // Ensure groq field exists and has all models
         if (!todayEntry.groq) {
             todayEntry.groq = {
-                'qwen3-32b': { chars: 0, limit: 1500000 },
-                'gpt-oss-120b': { chars: 0, limit: 600000 },
-                'gpt-oss-20b': { chars: 0, limit: 600000 },
-                'kimi-k2-instruct': { chars: 0, limit: 600000 },
+                'llama-3.3-70b-versatile': { chars: 0, limit: 1000000 },
+                'llama-3.1-8b-instant': { chars: 0, limit: 1000000 },
+                'mixtral-8x7b-32768': { chars: 0, limit: 1000000 },
+                'gemma2-9b-it': { chars: 0, limit: 1000000 },
             };
             modified = true;
         } else {
             const expectedGroqModels = {
-                'qwen3-32b': 1500000,
-                'gpt-oss-120b': 600000,
-                'gpt-oss-20b': 600000,
-                'kimi-k2-instruct': 600000,
+                'llama-3.3-70b-versatile': 1000000,
+                'llama-3.1-8b-instant': 1000000,
+                'mixtral-8x7b-32768': 1000000,
+                'gemma2-9b-it': 1000000,
             };
+            // Clean up deprecated groq keys
+            for (const key of Object.keys(todayEntry.groq)) {
+                if (!expectedGroqModels[key]) {
+                    delete todayEntry.groq[key];
+                    modified = true;
+                }
+            }
             for (const [model, limitVal] of Object.entries(expectedGroqModels)) {
                 if (!todayEntry.groq[model]) {
                     todayEntry.groq[model] = { chars: 0, limit: limitVal };
@@ -400,17 +407,17 @@ function getModelForToday() {
     const todayEntry = getTodayLimits();
     const groq = todayEntry.groq;
 
-    if (groq['qwen3-32b'].chars < groq['qwen3-32b'].limit) {
-        return 'qwen/qwen3-32b';
+    if (groq['llama-3.3-70b-versatile'] && groq['llama-3.3-70b-versatile'].chars < groq['llama-3.3-70b-versatile'].limit) {
+        return 'llama-3.3-70b-versatile';
     }
-    if (groq['gpt-oss-120b'].chars < groq['gpt-oss-120b'].limit) {
-        return 'openai/gpt-oss-120b';
+    if (groq['llama-3.1-8b-instant'] && groq['llama-3.1-8b-instant'].chars < groq['llama-3.1-8b-instant'].limit) {
+        return 'llama-3.1-8b-instant';
     }
-    if (groq['gpt-oss-20b'].chars < groq['gpt-oss-20b'].limit) {
-        return 'openai/gpt-oss-20b';
+    if (groq['mixtral-8x7b-32768'] && groq['mixtral-8x7b-32768'].chars < groq['mixtral-8x7b-32768'].limit) {
+        return 'mixtral-8x7b-32768';
     }
-    if (groq['kimi-k2-instruct'].chars < groq['kimi-k2-instruct'].limit) {
-        return 'moonshotai/kimi-k2-instruct';
+    if (groq['gemma2-9b-it'] && groq['gemma2-9b-it'].chars < groq['gemma2-9b-it'].limit) {
+        return 'gemma2-9b-it';
     }
 
     // All limits exhausted

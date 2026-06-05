@@ -382,6 +382,8 @@ export class CheatingDaddyApp extends LitElement {
         _storageLoaded: { state: true },
         _updateAvailable: { state: true },
         _whisperDownloading: { state: true },
+        audioCaptureMode: { type: String },
+        isManualRecording: { type: Boolean },
     };
 
     constructor() {
@@ -408,6 +410,8 @@ export class CheatingDaddyApp extends LitElement {
         this._updateAvailable = false;
         this._whisperDownloading = false;
         this._localVersion = '';
+        this.audioCaptureMode = 'auto';
+        this.isManualRecording = false;
 
         this._loadFromStorage();
         this._checkForUpdates();
@@ -697,6 +701,25 @@ export class CheatingDaddyApp extends LitElement {
         }
     }
 
+    async handleAudioCaptureModeChange(mode) {
+        this.audioCaptureMode = mode;
+        this.isManualRecording = false;
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            await ipcRenderer.invoke('set-audio-capture-mode', mode);
+        }
+        this.requestUpdate();
+    }
+
+    async handleManualRecordingChange(isRecording) {
+        this.isManualRecording = isRecording;
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            await ipcRenderer.invoke('toggle-manual-recording', isRecording);
+        }
+        this.requestUpdate();
+    }
+
     handleResponseIndexChanged(e) {
         this.currentResponseIndex = e.detail.index;
         this.shouldAnimateResponse = false;
@@ -783,7 +806,11 @@ export class CheatingDaddyApp extends LitElement {
                         .selectedProfile=${this.selectedProfile}
                         .onSendText=${msg => this.handleSendText(msg)}
                         .shouldAnimateResponse=${this.shouldAnimateResponse}
+                        .audioCaptureMode=${this.audioCaptureMode}
+                        .isManualRecording=${this.isManualRecording}
                         @response-index-changed=${this.handleResponseIndexChanged}
+                        @audio-capture-mode-changed=${e => this.handleAudioCaptureModeChange(e.detail.mode)}
+                        @manual-recording-changed=${e => this.handleManualRecordingChange(e.detail.isRecording)}
                         @response-animation-complete=${() => {
                             this.shouldAnimateResponse = false;
                             this._currentResponseIsComplete = true;

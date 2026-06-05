@@ -1,5 +1,5 @@
 const { GoogleGenAI, Modality } = require('@google/genai');
-const { BrowserWindow, ipcMain } = require('electron');
+const { BrowserWindow, ipcMain, dialog } = require('electron');
 const { spawn } = require('child_process');
 const WebSocket = require('ws');
 const { saveDebugAudio } = require('../audioUtils');
@@ -57,6 +57,9 @@ let messageBuffer = '';
 let deepgramWs = null;
 let deepgramApiKey = '';
 let deepgramTranscriptionTimeout = null;
+let isManualMode = false;
+let isManualRecording = false;
+let hasShownPermissionDialog = false;
 
 // Reconnection variables
 let isUserClosing = false;
@@ -505,7 +508,7 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                         if (messageBuffer.trim()) {
                             saveConversationTurn(currentTranscription, messageBuffer);
                             messageBuffer = '';
-                        } else if (currentTranscription.trim() !== '') {
+                        } else if (currentTranscription.trim() !== '' && !isManualMode) {
                             // Gemini gave no direct answer — use Groq/Gemma for speed
                             if (hasGroqKey()) {
                                 sendToGroq(currentTranscription);
@@ -513,12 +516,14 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                                 sendToGemma(currentTranscription);
                             }
                         }
-                        currentTranscription = '';
+                        if (!isManualMode) {
+                            currentTranscription = '';
+                        }
                     }
 
                     if (message.serverContent?.turnComplete) {
                         // Fallback: if transcription accumulated but generationComplete never fired
-                        if (currentTranscription.trim() !== '' && messageBuffer.trim() === '') {
+                        if (currentTranscription.trim() !== '' && messageBuffer.trim() === '' && !isManualMode) {
                             if (hasGroqKey()) {
                                 sendToGroq(currentTranscription);
                             } else {
@@ -527,7 +532,9 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                             currentTranscription = '';
                         }
                         messageBuffer = '';
-                        sendToRenderer('update-status', 'Listening...');
+                        if (!isManualMode) {
+                            sendToRenderer('update-status', 'Listening...');
+                        }
                     }
                 },
                 onerror: function (e) {
@@ -699,7 +706,7 @@ async function connectDeepgramWebSocket(language = 'en-US') {
 
             const model = 'nova-2-general';
             const langCode = language || 'en-US';
-            const url = `wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=24000&channels=1&model=${model}&language=${langCode}&interim_results=true&endpointing=400&utterance_end_ms=1000`;
+            const url = `wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=24000&channels=1&model=${model}&language=${langCode}&interim_results=true&endpointing=200&utterance_end_ms=600`;
 
             deepgramWs = new WebSocket(url, {
                 headers: {
@@ -727,14 +734,16 @@ async function connectDeepgramWebSocket(language = 'en-US') {
                             if (isFinal) {
                                 currentTranscription += ' ' + transcript;
 
-                                if (speechFinal) {
+                                if (isManualMode) {
+                                    sendToRenderer('update-status', 'Recording question...');
+                                } else if (speechFinal) {
                                     if (deepgramTranscriptionTimeout) clearTimeout(deepgramTranscriptionTimeout);
                                     triggerDeepgramGroqAnswer();
                                 } else {
                                     if (deepgramTranscriptionTimeout) clearTimeout(deepgramTranscriptionTimeout);
                                     deepgramTranscriptionTimeout = setTimeout(() => {
                                         triggerDeepgramGroqAnswer();
-                                    }, 2500);
+                                    }, 800);
                                 }
                             }
                         }
@@ -787,6 +796,8 @@ async function startMacOSAudioCapture(geminiSessionRef) {
     // Kill any existing SystemAudioDump processes first
     await killExistingSystemAudioDump();
 
+    hasShownPermissionDialog = false;
+
     console.log('Starting macOS audio capture with SystemAudioDump...');
 
     const { app } = require('electron');
@@ -826,6 +837,9 @@ async function startMacOSAudioCapture(geminiSessionRef) {
     let audioBuffer = Buffer.alloc(0);
 
     systemAudioProc.stdout.on('data', data => {
+        if (isManualMode && !isManualRecording) {
+            return;
+        }
         audioBuffer = Buffer.concat([audioBuffer, data]);
 
         while (audioBuffer.length >= CHUNK_SIZE) {
@@ -858,7 +872,21 @@ async function startMacOSAudioCapture(geminiSessionRef) {
     });
 
     systemAudioProc.stderr.on('data', data => {
-        console.error('SystemAudioDump stderr:', data.toString());
+        const errorMsg = data.toString();
+        console.error('SystemAudioDump stderr:', errorMsg);
+
+        if (!hasShownPermissionDialog && (errorMsg.includes('SCStreamErrorDomain') || errorMsg.includes('-3821'))) {
+            hasShownPermissionDialog = true;
+            console.error('[Permissions] Missing macOS Screen Recording permission detected.');
+            dialog.showMessageBox({
+                type: 'warning',
+                title: 'Permission Required',
+                message: 'macOS Screen & Audio Recording Permission Required',
+                detail: 'Norton 340 requires "Screen & System Audio Recording" or "Screen Recording" permission to capture your system audio.\n\nPlease enable it under:\nSystem Settings > Privacy & Security > Screen & System Audio Recording (or Screen Recording)\n\nAfter enabling, please restart the application.',
+                buttons: ['OK']
+            });
+            sendToRenderer('update-status', 'Error: Permissions missing');
+        }
     });
 
     systemAudioProc.on('close', code => {
@@ -977,6 +1005,42 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     // Store the geminiSessionRef globally for reconnection access
     global.geminiSessionRef = geminiSessionRef;
 
+    ipcMain.handle('set-audio-capture-mode', async (event, mode) => {
+        isManualMode = (mode === 'manual');
+        console.log('Audio capture mode updated to:', mode, 'isManualMode:', isManualMode);
+        isManualRecording = false;
+        return { success: true };
+    });
+
+    ipcMain.handle('toggle-manual-recording', async (event, recordingState) => {
+        isManualRecording = recordingState;
+        console.log('Manual recording state updated to:', isManualRecording);
+        
+        if (!isManualRecording) {
+            // Wait 600ms for final audio chunks to finish transcribing
+            setTimeout(() => {
+                const textToSend = currentTranscription.trim();
+                currentTranscription = '';
+                if (textToSend) {
+                    console.log('[Manual mode] Triggering answer for:', textToSend);
+                    sendToRenderer('update-status', 'Thinking...');
+                    if (hasGroqKey()) {
+                        sendToGroq(textToSend);
+                    } else {
+                        sendToGemma(textToSend);
+                    }
+                } else {
+                    console.log('[Manual mode] No transcription to send');
+                    sendToRenderer('update-status', 'Listening...');
+                }
+            }, 250);
+        } else {
+            currentTranscription = '';
+            sendToRenderer('update-status', 'Recording question...');
+        }
+        return { success: true };
+    });
+
     ipcMain.handle('initialize-cloud', async (event, token, profile, userContext) => {
         try {
             currentProviderMode = 'cloud';
@@ -1025,6 +1089,9 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     });
 
     ipcMain.handle('send-audio-content', async (event, { data, mimeType }) => {
+        if (isManualMode && !isManualRecording) {
+            return { success: true };
+        }
         if (currentProviderMode === 'cloud') {
             try {
                 const pcmBuffer = Buffer.from(data, 'base64');
@@ -1071,6 +1138,9 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
 
     // Handle microphone audio on a separate channel
     ipcMain.handle('send-mic-audio-content', async (event, { data, mimeType }) => {
+        if (isManualMode && !isManualRecording) {
+            return { success: true };
+        }
         if (currentProviderMode === 'cloud') {
             try {
                 const pcmBuffer = Buffer.from(data, 'base64');

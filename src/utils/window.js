@@ -8,12 +8,40 @@ const DEFAULT_MAIN_WINDOW_SIZE = { width: 1100, height: 800 };
 const MIN_WINDOW_SIZE = { width: 700, height: 320 };
 
 function createWindow(sendToRenderer, geminiSessionRef) {
-    let windowWidth = DEFAULT_MAIN_WINDOW_SIZE.width;
-    let windowHeight = DEFAULT_MAIN_WINDOW_SIZE.height;
+    const config = storage.getConfig();
+    const savedBounds = config.windowBounds;
+    let x = undefined;
+    let y = undefined;
+    let width = DEFAULT_MAIN_WINDOW_SIZE.width;
+    let height = DEFAULT_MAIN_WINDOW_SIZE.height;
+
+    if (savedBounds) {
+        // Verify the saved position is visible on at least one display
+        const displays = screen.getAllDisplays();
+        const isVisible = displays.some(display => {
+            const displayBounds = display.bounds;
+            // Check if the center of the saved bounds is inside the display
+            const centerX = savedBounds.x + savedBounds.width / 2;
+            const centerY = savedBounds.y + savedBounds.height / 2;
+            return centerX >= displayBounds.x &&
+                   centerX <= displayBounds.x + displayBounds.width &&
+                   centerY >= displayBounds.y &&
+                   centerY <= displayBounds.y + displayBounds.height;
+        });
+
+        if (isVisible) {
+            x = savedBounds.x;
+            y = savedBounds.y;
+            width = savedBounds.width;
+            height = savedBounds.height;
+        }
+    }
 
     const mainWindow = new BrowserWindow({
-        width: windowWidth,
-        height: windowHeight,
+        x: x,
+        y: y,
+        width: width,
+        height: height,
         minWidth: MIN_WINDOW_SIZE.width,
         minHeight: MIN_WINDOW_SIZE.height,
         resizable: true,
@@ -85,6 +113,20 @@ function createWindow(sendToRenderer, geminiSessionRef) {
             updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessionRef);
         }, 150);
     });
+
+    let saveTimeout;
+    const saveBounds = () => {
+        if (saveTimeout) clearTimeout(saveTimeout);
+        saveTimeout = setTimeout(() => {
+            if (!mainWindow.isDestroyed()) {
+                const bounds = mainWindow.getBounds();
+                storage.updateConfig('windowBounds', bounds);
+            }
+        }, 500);
+    };
+
+    mainWindow.on('resize', saveBounds);
+    mainWindow.on('move', saveBounds);
 
     setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef);
 

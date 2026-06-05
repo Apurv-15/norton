@@ -310,6 +310,108 @@ export class AssistantView extends LitElement {
             height: calc(100% + 2px);
             pointer-events: none;
         }
+
+        /* ── Audio control bar ── */
+        .audio-control-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--space-md);
+            padding: var(--space-xs) var(--space-md);
+            background: var(--bg-surface);
+            border-top: 1px solid var(--border);
+        }
+
+        .toggle-group {
+            display: flex;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 100px;
+            padding: 2px;
+        }
+
+        .toggle-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: var(--font-size-xs);
+            font-family: var(--font-mono);
+            padding: var(--space-xs) var(--space-md);
+            border-radius: 100px;
+            cursor: pointer;
+            transition: all var(--transition);
+        }
+
+        .toggle-btn.active {
+            background: var(--bg-surface);
+            color: var(--text-primary);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .record-btn {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: var(--danger);
+            font-size: var(--font-size-xs);
+            font-family: var(--font-mono);
+            padding: var(--space-xs) var(--space-md);
+            border-radius: 100px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: var(--space-xs);
+            transition: all var(--transition);
+        }
+
+        .record-btn:hover:not(:disabled) {
+            background: rgba(239, 68, 68, 0.2);
+            border-color: var(--danger);
+        }
+
+        .record-btn:disabled {
+            opacity: 0.3;
+            cursor: default;
+            background: var(--bg-elevated);
+            border-color: var(--border);
+            color: var(--text-muted);
+        }
+
+        .record-btn.recording {
+            background: var(--danger);
+            color: #ffffff;
+            border-color: var(--danger);
+            animation: pulse-red 1.5s infinite;
+        }
+
+        @keyframes pulse-red {
+            0% {
+                box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+            }
+            70% {
+                box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+            }
+        }
+
+        .record-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--danger);
+            transition: background-color var(--transition);
+        }
+
+        .record-btn.recording .record-dot {
+            background: #ffffff;
+            animation: blink-dot 1s infinite alternate;
+        }
+
+        @keyframes blink-dot {
+            from { opacity: 0.3; }
+            to { opacity: 1; }
+        }
     `;
 
     static properties = {
@@ -319,6 +421,8 @@ export class AssistantView extends LitElement {
         onSendText: { type: Function },
         shouldAnimateResponse: { type: Boolean },
         isAnalyzing: { type: Boolean, state: true },
+        audioCaptureMode: { type: String },
+        isManualRecording: { type: Boolean },
     };
 
     constructor() {
@@ -329,6 +433,24 @@ export class AssistantView extends LitElement {
         this.onSendText = () => {};
         this.isAnalyzing = false;
         this._animFrame = null;
+        this.audioCaptureMode = 'auto';
+        this.isManualRecording = false;
+    }
+
+    toggleAudioCaptureMode(mode) {
+        this.dispatchEvent(new CustomEvent('audio-capture-mode-changed', {
+            detail: { mode: mode },
+            bubbles: true,
+            composed: true
+        }));
+    }
+
+    toggleManualRecording() {
+        this.dispatchEvent(new CustomEvent('manual-recording-changed', {
+            detail: { isRecording: !this.isManualRecording },
+            bubbles: true,
+            composed: true
+        }));
     }
 
     getProfileNames() {
@@ -717,6 +839,20 @@ export class AssistantView extends LitElement {
                       </div>
                   `
                 : ''}
+
+            <div class="audio-control-bar">
+                <div class="toggle-group">
+                    <button class="toggle-btn ${this.audioCaptureMode === 'auto' ? 'active' : ''}" @click=${() => this.toggleAudioCaptureMode('auto')}>Auto Capture</button>
+                    <button class="toggle-btn ${this.audioCaptureMode === 'manual' ? 'active' : ''}" @click=${() => this.toggleAudioCaptureMode('manual')}>Manual Capture</button>
+                </div>
+
+                <button class="record-btn ${this.isManualRecording ? 'recording' : ''}" 
+                        ?disabled=${this.audioCaptureMode !== 'manual'} 
+                        @click=${this.toggleManualRecording}>
+                    <div class="record-dot"></div>
+                    ${this.isManualRecording ? 'Stop & Send' : 'Record Question'}
+                </button>
+            </div>
 
             <div class="input-bar">
                 <div class="input-bar-inner">
