@@ -58,6 +58,7 @@ let messageBuffer = '';
 let deepgramWs = null;
 let deepgramApiKey = '';
 let deepgramTranscriptionTimeout = null;
+let deepgramKeepAliveInterval = null;
 let isManualMode = false;
 let isManualRecording = false;
 let hasShownPermissionDialog = false;
@@ -281,8 +282,8 @@ async function sendToGroq(transcription) {
                 model: modelToUse,
                 messages: [{ role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' }, ...groqConversationHistory],
                 stream: true,
-                temperature: 0.7,
-                max_tokens: 1024,
+                temperature: 0.1,
+                max_tokens: 600,
             }),
         });
 
@@ -714,7 +715,7 @@ async function connectDeepgramWebSocket(language = 'en-US') {
 
             const model = 'nova-2-general';
             const langCode = language || 'en-US';
-            const url = `wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=24000&channels=1&model=${model}&language=${langCode}&interim_results=true&endpointing=200&utterance_end_ms=600`;
+            const url = `wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=24000&channels=1&model=${model}&language=${langCode}&interim_results=true&endpointing=100`;
 
             deepgramWs = new WebSocket(url, {
                 headers: {
@@ -725,6 +726,12 @@ async function connectDeepgramWebSocket(language = 'en-US') {
             deepgramWs.on('open', () => {
                 console.log('Deepgram WebSocket connected!');
                 sendToRenderer('update-status', 'Deepgram connected. Listening...');
+                // ponytail: keepalive every 8s so Deepgram doesn't idle-close (~10s timeout)
+                deepgramKeepAliveInterval = setInterval(() => {
+                    if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+                        deepgramWs.send(JSON.stringify({ type: 'KeepAlive' }));
+                    }
+                }, 8000);
                 resolve(true);
             });
 
@@ -751,7 +758,7 @@ async function connectDeepgramWebSocket(language = 'en-US') {
                                     if (deepgramTranscriptionTimeout) clearTimeout(deepgramTranscriptionTimeout);
                                     deepgramTranscriptionTimeout = setTimeout(() => {
                                         triggerDeepgramGroqAnswer();
-                                    }, 800);
+                                    }, 350);
                                 }
                             }
                         }
@@ -764,12 +771,20 @@ async function connectDeepgramWebSocket(language = 'en-US') {
             deepgramWs.on('error', err => {
                 console.error('Deepgram WebSocket error:', err);
                 sendToRenderer('update-status', 'Deepgram error: ' + err.message);
+                if (deepgramKeepAliveInterval) {
+                    clearInterval(deepgramKeepAliveInterval);
+                    deepgramKeepAliveInterval = null;
+                }
                 resolve(false);
             });
 
             deepgramWs.on('close', (code, reason) => {
                 console.log(`Deepgram WebSocket closed. Code: ${code}, Reason: ${reason}`);
                 deepgramWs = null;
+                if (deepgramKeepAliveInterval) {
+                    clearInterval(deepgramKeepAliveInterval);
+                    deepgramKeepAliveInterval = null;
+                }
                 if (!isUserClosing) {
                     sendToRenderer('update-status', 'Deepgram disconnected. Reconnecting...');
                     setTimeout(() => {
@@ -1298,12 +1313,6 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         try {
             console.log('Sending text message:', text);
 
-            if (hasGroqKey()) {
-                sendToGroq(text.trim());
-            } else {
-                sendToGemma(text.trim());
-            }
-
             await geminiSessionRef.current.sendRealtimeInput({ text: text.trim() });
             return { success: true };
         } catch (error) {
@@ -1360,6 +1369,10 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             sessionParams = null;
 
             // Cleanup Deepgram WebSocket
+            if (deepgramKeepAliveInterval) {
+                clearInterval(deepgramKeepAliveInterval);
+                deepgramKeepAliveInterval = null;
+            }
             if (deepgramWs) {
                 try {
                     deepgramWs.close();
