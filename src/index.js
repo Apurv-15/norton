@@ -11,10 +11,11 @@ process.stderr.on('error', err => {
     if (err.code !== 'EPIPE') throw err;
 });
 
-const { app, BrowserWindow, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, dialog } = require('electron');
 const { createWindow, updateGlobalShortcuts } = require('./utils/window');
 const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = require('./utils/gemini');
 const storage = require('./storage');
+const { extractTextFromPDF } = require('./utils/pdfProcessor');
 
 const geminiSessionRef = { current: null };
 let mainWindow = null;
@@ -280,6 +281,58 @@ function setupStorageIpcHandlers() {
             return { success: true };
         } catch (error) {
             console.error('Error clearing all data:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    // ============ CV MANAGEMENT ============
+    ipcMain.handle('cv:upload', async event => {
+        try {
+            const path = require('path');
+            const result = await dialog.showOpenDialog(mainWindow, {
+                properties: ['openFile'],
+                filters: [{ name: 'PDF Files', extensions: ['pdf'] }],
+            });
+
+            if (result.canceled || result.filePaths.length === 0) {
+                return { success: false, error: 'Upload canceled' };
+            }
+
+            const filePath = result.filePaths[0];
+            const filename = path.basename(filePath);
+            const text = await extractTextFromPDF(filePath);
+
+            storage.updatePreference('cvText', text);
+            storage.updatePreference('cvFilename', filename);
+
+            return { success: true, filename, charCount: text.length };
+        } catch (error) {
+            console.error('Error in cv:upload handler:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('cv:status', async () => {
+        try {
+            const prefs = storage.getPreferences();
+            return {
+                success: true,
+                filename: prefs.cvFilename || '',
+                charCount: (prefs.cvText || '').length,
+            };
+        } catch (error) {
+            console.error('Error in cv:status handler:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('cv:clear', async () => {
+        try {
+            storage.updatePreference('cvText', '');
+            storage.updatePreference('cvFilename', '');
+            return { success: true };
+        } catch (error) {
+            console.error('Error in cv:clear handler:', error);
             return { success: false, error: error.message };
         }
     });

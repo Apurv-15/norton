@@ -495,6 +495,69 @@ export class MainView extends LitElement {
             color: var(--warning);
             line-height: var(--line-height);
         }
+
+        .cv-card {
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            background: var(--bg-elevated);
+            padding: 12px 14px;
+            cursor: pointer;
+            transition:
+                border-color var(--transition),
+                background var(--transition);
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-bottom: var(--space-xs);
+        }
+
+        .cv-card:hover {
+            border-color: var(--border-strong);
+            background: var(--bg-hover);
+        }
+
+        .cv-card.active {
+            border-color: rgba(34, 197, 94, 0.4);
+            background: rgba(34, 197, 94, 0.03);
+        }
+
+        .cv-card-header {
+            display: flex;
+            align-items: center;
+            gap: var(--space-xs);
+        }
+
+        .cv-card-icon {
+            width: 16px;
+            height: 16px;
+            color: var(--text-secondary);
+        }
+
+        .cv-card.active .cv-card-icon {
+            color: var(--success, #22c55e);
+        }
+
+        .cv-card-title {
+            font-size: var(--font-size-xs);
+            font-weight: var(--font-weight-semibold);
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .cv-card.active .cv-card-title {
+            color: var(--success, #22c55e);
+        }
+
+        .cv-card-body {
+            font-size: var(--font-size-xs);
+            color: var(--text-muted);
+        }
+
+        .cv-card-filename {
+            font-weight: var(--font-weight-medium);
+            color: var(--text-primary);
+        }
     `;
 
     static properties = {
@@ -504,6 +567,9 @@ export class MainView extends LitElement {
         onProfileChange: { type: Function },
         isInitializing: { type: Boolean },
         whisperDownloading: { type: Boolean },
+        onNavigate: { type: Function },
+        cvFilename: { type: String },
+        cvCharCount: { type: Number },
         // Internal state
         _mode: { state: true },
         _token: { state: true },
@@ -528,6 +594,9 @@ export class MainView extends LitElement {
         this.onProfileChange = () => {};
         this.isInitializing = false;
         this.whisperDownloading = false;
+        this.onNavigate = () => {};
+        this.cvFilename = '';
+        this.cvCharCount = 0;
 
         this._mode = 'byok';
         this._token = '';
@@ -1021,9 +1090,35 @@ export class MainView extends LitElement {
                     : html` <div class="page-title">${html`Norton 340 <span class="mode-suffix">BYOK</span>`}</div> `}
                 <div class="page-subtitle">${this._mode === 'byok' ? 'Bring your own API keys' : 'Run models locally on your machine'}</div>
 
+                ${this._renderCVCard()}
+
                 <!-- Cloud mode render branch intentionally disabled. -->
                 ${this._mode === 'byok' ? this._renderByokMode() : ''}
                 ${this._mode === 'local' ? (this._showLocalHelp ? this._renderLocalHelp() : this._renderLocalMode()) : ''}
+            </div>
+        `;
+    }
+
+    _renderCVCard() {
+        const hasCV = this.cvFilename && this.cvFilename.trim().length > 0;
+        return html`
+            <div class="cv-card ${hasCV ? 'active' : ''}" @click=${() => this.onNavigate('cv-upload')}>
+                <div class="cv-card-header">
+                    <svg class="cv-card-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                        />
+                    </svg>
+                    <span class="cv-card-title">${hasCV ? 'CV / Resume Loaded' : 'No CV / Resume Uploaded'}</span>
+                </div>
+                <div class="cv-card-body">
+                    ${hasCV
+                        ? html`<span class="cv-card-filename">${this.cvFilename} (${this.cvCharCount.toLocaleString()} chars)</span>`
+                        : html`<span class="cv-card-prompt">Click here to upload your CV / resume</span>`}
+                </div>
             </div>
         `;
     }

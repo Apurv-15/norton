@@ -12,6 +12,7 @@ const {
     getDeepgramApiKey,
     incrementCharUsage,
     getModelForToday,
+    getPreferences,
 } = require('../storage');
 const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, isCloudActive, setOnTurnComplete } = require('./cloud');
 
@@ -460,7 +461,14 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
     const enabledTools = await getEnabledTools();
     const googleSearchEnabled = enabledTools.some(tool => tool.googleSearch);
 
-    const systemPrompt = getSystemPrompt(profile, customPrompt, googleSearchEnabled);
+    const prefs = getPreferences();
+    let finalCustomPrompt = customPrompt;
+    if (prefs.cvText && prefs.cvText.trim()) {
+        finalCustomPrompt = `${customPrompt}\n\n[CV/Resume Context]:\n${prefs.cvText}`;
+        console.log('Integrated CV Context, length:', prefs.cvText.length);
+    }
+
+    const systemPrompt = getSystemPrompt(profile, finalCustomPrompt, googleSearchEnabled);
     currentSystemPrompt = systemPrompt; // Store for Groq
 
     // Initialize new conversation session only on first connect
@@ -783,10 +791,16 @@ async function initializeDeepgramSession(apiKey, customPrompt = '', profile = 'i
 
     // Use prompts module to get current instruction
     const googleSearchEnabled = false;
-    const systemPrompt = getSystemPrompt(profile, customPrompt, googleSearchEnabled);
+    const prefs = getPreferences();
+    let finalCustomPrompt = customPrompt;
+    if (prefs.cvText && prefs.cvText.trim()) {
+        finalCustomPrompt = `${customPrompt}\n\n[CV/Resume Context]:\n${prefs.cvText}`;
+        console.log('Integrated CV Context, length:', prefs.cvText.length);
+    }
+    const systemPrompt = getSystemPrompt(profile, finalCustomPrompt, googleSearchEnabled);
     currentSystemPrompt = systemPrompt;
 
-    initializeNewSession(profile, customPrompt);
+    initializeNewSession(profile, finalCustomPrompt);
     return connectDeepgramWebSocket(language);
 }
 
@@ -883,7 +897,7 @@ async function startMacOSAudioCapture(geminiSessionRef) {
                 title: 'Permission Required',
                 message: 'macOS Screen & Audio Recording Permission Required',
                 detail: 'Norton 340 requires "Screen & System Audio Recording" or "Screen Recording" permission to capture your system audio.\n\nPlease enable it under:\nSystem Settings > Privacy & Security > Screen & System Audio Recording (or Screen Recording)\n\nAfter enabling, please restart the application.',
-                buttons: ['OK']
+                buttons: ['OK'],
             });
             sendToRenderer('update-status', 'Error: Permissions missing');
         }
@@ -1006,7 +1020,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     global.geminiSessionRef = geminiSessionRef;
 
     ipcMain.handle('set-audio-capture-mode', async (event, mode) => {
-        isManualMode = (mode === 'manual');
+        isManualMode = mode === 'manual';
         console.log('Audio capture mode updated to:', mode, 'isManualMode:', isManualMode);
         isManualRecording = false;
         return { success: true };
@@ -1015,7 +1029,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     ipcMain.handle('toggle-manual-recording', async (event, recordingState) => {
         isManualRecording = recordingState;
         console.log('Manual recording state updated to:', isManualRecording);
-        
+
         if (!isManualRecording) {
             // Wait 600ms for final audio chunks to finish transcribing
             setTimeout(() => {

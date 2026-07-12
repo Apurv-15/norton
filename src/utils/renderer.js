@@ -207,18 +207,23 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
     currentImageQuality = imageQuality;
 
     // Refresh preferences cache
+    // Refresh preferences cache
     await loadPreferencesCache();
     const audioMode = preferencesCache.audioMode || 'speaker_only';
+    const appMode = preferencesCache.appMode || 'interview';
 
     try {
         if (isMacOS) {
             // On macOS, use SystemAudioDump for audio and getDisplayMedia for screen
-            console.log('Starting macOS capture with SystemAudioDump...');
-
-            // Start macOS audio capture
-            const audioResult = await ipcRenderer.invoke('start-macos-audio');
-            if (!audioResult.success) {
-                throw new Error('Failed to start macOS audio capture: ' + audioResult.error);
+            if (appMode !== 'coding') {
+                console.log('Starting macOS capture with SystemAudioDump...');
+                // Start macOS audio capture
+                const audioResult = await ipcRenderer.invoke('start-macos-audio');
+                if (!audioResult.success) {
+                    throw new Error('Failed to start macOS audio capture: ' + audioResult.error);
+                }
+            } else {
+                console.log('Starting macOS capture in Coding Mode (audio disabled)...');
             }
 
             // Get screen capture for screenshots
@@ -231,9 +236,9 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                 audio: false, // Don't use browser audio on macOS
             });
 
-            console.log('macOS screen capture started - audio handled by SystemAudioDump');
+            console.log('macOS screen capture started');
 
-            if (audioMode === 'mic_only' || audioMode === 'both') {
+            if (appMode !== 'coding' && (audioMode === 'mic_only' || audioMode === 'both')) {
                 let micStream = null;
                 try {
                     micStream = await navigator.mediaDevices.getUserMedia({
@@ -262,19 +267,24 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                         width: { ideal: 1920 },
                         height: { ideal: 1080 },
                     },
-                    audio: {
-                        sampleRate: SAMPLE_RATE,
-                        channelCount: 1,
-                        echoCancellation: false, // Don't cancel system audio
-                        noiseSuppression: false,
-                        autoGainControl: false,
-                    },
+                    audio:
+                        appMode !== 'coding'
+                            ? {
+                                  sampleRate: SAMPLE_RATE,
+                                  channelCount: 1,
+                                  echoCancellation: false, // Don't cancel system audio
+                                  noiseSuppression: false,
+                                  autoGainControl: false,
+                              }
+                            : false,
                 });
 
-                console.log('Linux system audio capture via getDisplayMedia succeeded');
+                console.log('Linux screen capture started');
 
-                // Setup audio processing for Linux system audio
-                setupLinuxSystemAudioProcessing();
+                // Setup audio processing for Linux system audio if not in coding mode
+                if (appMode !== 'coding') {
+                    setupLinuxSystemAudioProcessing();
+                }
             } catch (systemAudioError) {
                 console.warn('System audio via getDisplayMedia failed, trying screen-only capture:', systemAudioError);
 
@@ -290,7 +300,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             }
 
             // Additionally get microphone input for Linux based on audio mode
-            if (audioMode === 'mic_only' || audioMode === 'both') {
+            if (appMode !== 'coding' && (audioMode === 'mic_only' || audioMode === 'both')) {
                 let micStream = null;
                 try {
                     micStream = await navigator.mediaDevices.getUserMedia({
@@ -323,21 +333,26 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                     width: { ideal: 1920 },
                     height: { ideal: 1080 },
                 },
-                audio: {
-                    sampleRate: SAMPLE_RATE,
-                    channelCount: 1,
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                },
+                audio:
+                    appMode !== 'coding'
+                        ? {
+                              sampleRate: SAMPLE_RATE,
+                              channelCount: 1,
+                              echoCancellation: true,
+                              noiseSuppression: true,
+                              autoGainControl: true,
+                          }
+                        : false,
             });
 
-            console.log('Windows capture started with loopback audio');
+            console.log('Windows capture started');
 
-            // Setup audio processing for Windows loopback audio only
-            setupWindowsLoopbackProcessing();
+            // Setup audio processing for Windows loopback audio only if not in coding mode
+            if (appMode !== 'coding') {
+                setupWindowsLoopbackProcessing();
+            }
 
-            if (audioMode === 'mic_only' || audioMode === 'both') {
+            if (appMode !== 'coding' && (audioMode === 'mic_only' || audioMode === 'both')) {
                 let micStream = null;
                 try {
                     micStream = await navigator.mediaDevices.getUserMedia({

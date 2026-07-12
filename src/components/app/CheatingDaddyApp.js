@@ -7,6 +7,8 @@ import { AssistantView } from '../views/AssistantView.js';
 import { OnboardingView } from '../views/OnboardingView.js';
 import { AICustomizeView } from '../views/AICustomizeView.js';
 import { FeedbackView } from '../views/FeedbackView.js';
+import { AdvancedView } from '../views/AdvancedView.js';
+import { CVUploadView } from '../views/CVUploadView.js';
 
 export class CheatingDaddyApp extends LitElement {
     static styles = css`
@@ -384,6 +386,9 @@ export class CheatingDaddyApp extends LitElement {
         _whisperDownloading: { state: true },
         audioCaptureMode: { type: String },
         isManualRecording: { type: Boolean },
+        cvFilename: { type: String },
+        cvCharCount: { type: Number },
+        appMode: { type: String },
     };
 
     constructor() {
@@ -412,6 +417,9 @@ export class CheatingDaddyApp extends LitElement {
         this._localVersion = '';
         this.audioCaptureMode = 'auto';
         this.isManualRecording = false;
+        this.cvFilename = '';
+        this.cvCharCount = 0;
+        this.appMode = 'interview';
 
         this._loadFromStorage();
         this._checkForUpdates();
@@ -450,6 +458,9 @@ export class CheatingDaddyApp extends LitElement {
             this.selectedScreenshotInterval = prefs.selectedScreenshotInterval || '5';
             this.selectedImageQuality = prefs.selectedImageQuality || 'medium';
             this.layoutMode = config.layout || 'normal';
+            this.cvFilename = prefs.cvFilename || '';
+            this.cvCharCount = (prefs.cvText || '').length;
+            this.appMode = prefs.appMode || 'interview';
 
             this._storageLoaded = true;
             this.requestUpdate();
@@ -762,6 +773,9 @@ export class CheatingDaddyApp extends LitElement {
                         .onStart=${() => this.handleStart()}
                         .onExternalLink=${url => this.handleExternalLinkClick(url)}
                         .whisperDownloading=${this._whisperDownloading}
+                        .cvFilename=${this.cvFilename}
+                        .cvCharCount=${this.cvCharCount}
+                        .onNavigate=${view => this.navigate(view)}
                     ></main-view>
                 `;
 
@@ -797,6 +811,26 @@ export class CheatingDaddyApp extends LitElement {
 
             case 'history':
                 return html`<history-view></history-view>`;
+
+            case 'advanced':
+                return html`
+                    <advanced-view
+                        .appMode=${this.appMode}
+                        @mode-changed=${e => {
+                            this.appMode = e.detail.mode;
+                        }}
+                    ></advanced-view>
+                `;
+
+            case 'cv-upload':
+                return html`
+                    <cv-upload-view
+                        .cvFilename=${this.cvFilename}
+                        .cvCharCount=${this.cvCharCount}
+                        .onBack=${() => this.navigate('main')}
+                        @cv-updated=${() => this._loadFromStorage()}
+                    ></cv-upload-view>
+                `;
 
             case 'assistant':
                 return html`
@@ -874,6 +908,20 @@ export class CheatingDaddyApp extends LitElement {
                         />
                         <path d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0" />
                     </g>
+                </svg>`,
+            },
+            {
+                id: 'advanced',
+                label: 'Advanced Settings',
+                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                    <path
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"
+                    />
                 </svg>`,
             },
             {

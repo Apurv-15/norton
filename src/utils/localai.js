@@ -270,7 +270,14 @@ async function initializeLocalSession(ollamaHost, model, whisperModel, profile, 
 
     try {
         // Setup system prompt
-        currentSystemPrompt = getSystemPrompt(profile, customPrompt, false);
+        const storage = require('../storage');
+        const prefs = storage.getPreferences();
+        let finalCustomPrompt = customPrompt;
+        if (prefs.cvText && prefs.cvText.trim()) {
+            finalCustomPrompt = `${customPrompt}\n\n[CV/Resume Context]:\n${prefs.cvText}`;
+            console.log('[LocalAI] Integrated CV Context, length:', prefs.cvText.length);
+        }
+        currentSystemPrompt = getSystemPrompt(profile, finalCustomPrompt, false);
 
         // Initialize Ollama client
         ollamaClient = new Ollama({ host: ollamaHost });
