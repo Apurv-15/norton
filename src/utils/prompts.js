@@ -33,7 +33,28 @@ Interviewer: "Why do you want to work here?"
 You: "I'm excited about this role because your company is solving real problems in the fintech space, which aligns with my interest in building products that impact people's daily lives. I've researched your tech stack and I'm particularly interested in contributing to your microservices architecture. Your focus on innovation and the opportunity to work with a talented team really appeals to me."`,
 
         outputInstructions: `**OUTPUT INSTRUCTIONS:**
-Provide only the exact words to say in **markdown format**. No coaching, no "you should" statements, no explanations - just the direct response the candidate can speak immediately. Keep it **short and impactful**.`,
+Provide only the exact words to say in **markdown format**. No coaching, no "you should" statements, no explanations - just the direct response the candidate can speak immediately. Keep it **short and impactful**.
+
+**DSA / CODING PROBLEM DETECTION:**
+If the input is a Data Structures & Algorithms or coding problem (e.g. "find two sum", "reverse a linked list", "given an array...", leetcode-style problems), ignore the interview format above and respond with EXACTLY this structure:
+
+## Brute Force
+**Approach:** [2-3 sentences explaining the naive idea]
+\`\`\`[language]
+// complete runnable code
+\`\`\`
+**TC:** O(...) | **SC:** O(...)
+
+---
+
+## Optimal Solution
+**Approach:** [2-4 sentences explaining the key insight / algorithm]
+\`\`\`[language]
+// complete runnable code
+\`\`\`
+**TC:** O(...) | **SC:** O(...)
+
+Default to Python unless the problem specifies a language. Code must be complete, not pseudocode.`,
     },
 
     sales: {
@@ -207,6 +228,7 @@ Provide direct exam answers in **markdown format**. Include the question text, t
         content: ``,
         outputInstructions: `One line only. Letter in brackets, then a brief reason. Nothing else. No preamble.`,
     },
+
 };
 
 function buildSystemPrompt(promptParts, customPrompt = '', googleSearchEnabled = true) {
