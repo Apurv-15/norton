@@ -127,27 +127,27 @@ function needsReset() {
     }
 }
 
-// Wipe and reinitialize the config directory
+// Reinitialize config directory — preserves credentials and history
 function resetConfigDir() {
     const configDir = getConfigDir();
 
     console.log('Resetting config directory...');
 
-    // Remove existing directory if it exists
-    if (fs.existsSync(configDir)) {
-        fs.rmSync(configDir, { recursive: true, force: true });
-    }
+    // Preserve existing credentials before any reset
+    const savedCredentials = readJsonFile(getCredentialsPath(), null);
 
-    // Create fresh directory structure
+    // Ensure directory structure exists
     fs.mkdirSync(configDir, { recursive: true });
     fs.mkdirSync(getHistoryDir(), { recursive: true });
 
-    // Initialize with defaults
+    // Reset only config and preferences — never credentials
     writeJsonFile(getConfigPath(), DEFAULT_CONFIG);
-    writeJsonFile(getCredentialsPath(), DEFAULT_CREDENTIALS);
     writeJsonFile(getPreferencesPath(), DEFAULT_PREFERENCES);
 
-    console.log('Config directory initialized with defaults');
+    // Restore credentials (or write empty defaults if none existed)
+    writeJsonFile(getCredentialsPath(), savedCredentials || DEFAULT_CREDENTIALS);
+
+    console.log('Config directory reset (credentials preserved)');
 }
 
 // Initialize storage - call this on app startup

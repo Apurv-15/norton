@@ -15,6 +15,7 @@ let hiddenVideo = null;
 let offscreenCanvas = null;
 let offscreenContext = null;
 let currentImageQuality = 'medium'; // Store current image quality for manual screenshots
+let _screenshotInFlight = false;
 
 const isLinux = process.platform === 'linux';
 const isMacOS = process.platform === 'darwin';
@@ -574,7 +575,13 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
 
 const MCQ_SCREENSHOT_PROMPT = `This is an MCQ exam question. Extract the question and all answer options exactly as written. Identify the correct answer. Reply with ONLY: [LETTER]) one-line reason. Nothing else.`;
 const DEFAULT_SCREENSHOT_PROMPT = `Help me on this page, give me the answer no bs, complete answer.
-So if its a code question, give me the approach in few bullet points, then the entire code. Also if theres anything else i need to know, tell me.
+If its a code/DSA question:
+- Look at the code editor in the screenshot. Find the STARTER CODE already shown — copy its exact function signature (name, parameters, return type, language syntax). Do NOT invent a different signature.
+- The language is whatever the starter code is written in (check the editor's language dropdown if visible). Never add TypeScript types to JavaScript. Never use Python syntax for Java. Match exactly.
+- Start your response with a tag like: \`[Language: JavaScript]\` or \`[Language: C++]\` etc.
+- Give the approach in 2-3 bullet points, then the COMPLETE working solution using that exact starter code as the base.
+- The code must compile and run without errors. Handle edge cases (empty input, null, large inputs).
+- Do not truncate the code.
 If its a question about the website, give me the answer no bs, complete answer.
 If its a mcq question, give me the answer no bs, complete answer.`;
 function getManualScreenshotPrompt() {
@@ -582,11 +589,18 @@ function getManualScreenshotPrompt() {
 }
 
 async function captureManualScreenshot(imageQuality = null) {
+    if (_screenshotInFlight) {
+        console.log('Screenshot already in flight, skipping duplicate');
+        return;
+    }
+    _screenshotInFlight = true;
+
     console.log('Manual screenshot triggered');
     const quality = imageQuality || currentImageQuality;
 
     if (!mediaStream) {
         console.error('No media stream available');
+        _screenshotInFlight = false;
         return;
     }
 
@@ -649,6 +663,7 @@ async function captureManualScreenshot(imageQuality = null) {
         async blob => {
             if (!blob) {
                 console.error('Failed to create blob from canvas');
+                _screenshotInFlight = false;
                 return;
             }
 
@@ -658,6 +673,7 @@ async function captureManualScreenshot(imageQuality = null) {
 
                 if (!base64data || base64data.length < 100) {
                     console.error('Invalid base64 data generated');
+                    _screenshotInFlight = false;
                     return;
                 }
 
@@ -668,6 +684,7 @@ async function captureManualScreenshot(imageQuality = null) {
                     data: base64data,
                     prompt: getManualScreenshotPrompt(),
                 });
+                _screenshotInFlight = false;
 
                 if (result.success) {
                     console.log(`Image response completed from ${result.model}`);
