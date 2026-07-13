@@ -724,9 +724,9 @@ async function connectDeepgramWebSocket(language = 'en-US') {
             console.log('Connecting to Deepgram WebSocket...');
             sendToRenderer('update-status', 'Connecting to Deepgram...');
 
-            const model = 'nova-2-general';
+            const model = 'nova-3';
             const langCode = language || 'en-US';
-            const url = `wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=24000&channels=1&model=${model}&language=${langCode}&interim_results=true&endpointing=100`;
+            const url = `wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=24000&channels=1&model=${model}&language=${langCode}&interim_results=true&endpointing=300&smart_format=true`;
 
             deepgramWs = new WebSocket(url, {
                 headers: {
