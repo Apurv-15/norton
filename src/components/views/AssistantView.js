@@ -622,12 +622,14 @@ export class AssistantView extends LitElement {
             ipcRenderer.on('scroll-response-down', this.handleScrollDown);
 
             this.handleWindowShown = (_, { hiddenFor }) => {
-                if (this._inputMode === 'ss') {
-                    if (window.captureManualScreenshot) window.captureManualScreenshot();
-                } else {
-                    const { clipboard } = window.require('electron');
-                    const text = clipboard.readText().trim();
-                    if (text) this.onSendText(text);
+                if (this.selectedProfile === 'mcq') {
+                    if (this._inputMode === 'ss') {
+                        if (window.captureManualScreenshot) window.captureManualScreenshot();
+                    } else {
+                        const { clipboard } = window.require('electron');
+                        const text = clipboard.readText().trim();
+                        if (text) this.onSendText(text);
+                    }
                 }
                 if (hiddenFor >= 5000) {
                     this._ghostHint = true;
