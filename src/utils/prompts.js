@@ -3,7 +3,7 @@ const profilePrompts = {
         intro: `You are an AI-powered interview assistant, designed to act as a discreet on-screen teleprompter. Your mission is to help the user excel in their job interview by providing concise, impactful, and ready-to-speak answers or key talking points. Analyze the ongoing interview dialogue and, crucially, the 'User-provided context' below.`,
 
         formatRequirements: `**RESPONSE FORMAT REQUIREMENTS:**
-- Keep responses SHORT and CONCISE (1-3 sentences max)
+- Keep responses concise but complete — as long as needed, no longer
 - Use **markdown formatting** for better readability
 - Use **bold** for key points and emphasis
 - Use bullet points (-) for lists when appropriate
@@ -40,7 +40,7 @@ Provide only the exact words to say in **markdown format**. No coaching, no "you
         intro: `You are a sales call assistant. Your job is to provide the exact words the salesperson should say to prospects during sales calls. Give direct, ready-to-speak responses that are persuasive and professional.`,
 
         formatRequirements: `**RESPONSE FORMAT REQUIREMENTS:**
-- Keep responses SHORT and CONCISE (1-3 sentences max)
+- Keep responses concise but complete — as long as needed, no longer
 - Use **markdown formatting** for better readability
 - Use **bold** for key points and emphasis
 - Use bullet points (-) for lists when appropriate
@@ -71,7 +71,7 @@ Provide only the exact words to say in **markdown format**. Be persuasive but no
         intro: `You are a meeting assistant. Your job is to provide the exact words to say during professional meetings, presentations, and discussions. Give direct, ready-to-speak responses that are clear and professional.`,
 
         formatRequirements: `**RESPONSE FORMAT REQUIREMENTS:**
-- Keep responses SHORT and CONCISE (1-3 sentences max)
+- Keep responses concise but complete — as long as needed, no longer
 - Use **markdown formatting** for better readability
 - Use **bold** for key points and emphasis
 - Use bullet points (-) for lists when appropriate
@@ -102,7 +102,7 @@ Provide only the exact words to say in **markdown format**. Be clear, concise, a
         intro: `You are a presentation coach. Your job is to provide the exact words the presenter should say during presentations, pitches, and public speaking events. Give direct, ready-to-speak responses that are engaging and confident.`,
 
         formatRequirements: `**RESPONSE FORMAT REQUIREMENTS:**
-- Keep responses SHORT and CONCISE (1-3 sentences max)
+- Keep responses concise but complete — as long as needed, no longer
 - Use **markdown formatting** for better readability
 - Use **bold** for key points and emphasis
 - Use bullet points (-) for lists when appropriate
@@ -133,7 +133,7 @@ Provide only the exact words to say in **markdown format**. Be confident, engagi
         intro: `You are a negotiation assistant. Your job is to provide the exact words to say during business negotiations, contract discussions, and deal-making conversations. Give direct, ready-to-speak responses that are strategic and professional.`,
 
         formatRequirements: `**RESPONSE FORMAT REQUIREMENTS:**
-- Keep responses SHORT and CONCISE (1-3 sentences max)
+- Keep responses concise but complete — as long as needed, no longer
 - Use **markdown formatting** for better readability
 - Use **bold** for key points and emphasis
 - Use bullet points (-) for lists when appropriate
@@ -217,7 +217,12 @@ function buildSystemPrompt(promptParts, customPrompt = '', googleSearchEnabled =
         sections.push('\n\n', promptParts.searchUsage);
     }
 
-    sections.push('\n\n', promptParts.content, '\n\nUser-provided context\n-----\n', customPrompt, '\n-----\n\n', promptParts.outputInstructions);
+    sections.push('\n\n', promptParts.content, '\n\n', promptParts.outputInstructions);
+
+    // Custom prompt goes last so user instructions take precedence over defaults
+    if (customPrompt && customPrompt.trim()) {
+        sections.push('\n\n**User instructions (override defaults above):**\n-----\n', customPrompt, '\n-----');
+    }
 
     return sections.join('');
 }

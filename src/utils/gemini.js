@@ -294,7 +294,7 @@ async function sendToGroq(transcription) {
                 messages: [{ role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' }, ...groqConversationHistory],
                 stream: true,
                 temperature: 0.1,
-                max_tokens: 600,
+                max_tokens: 1500,
             }),
         });
 
