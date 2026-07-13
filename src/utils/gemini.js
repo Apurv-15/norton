@@ -981,25 +981,90 @@ async function sendAudioToGemini(base64Data, geminiSessionRef) {
     }
 }
 
-async function sendImageToGeminiHttp(base64Data, prompt) {
-    // Get available model based on rate limits
-    const model = getAvailableModel();
+async function sendImageToGroq(base64Data, prompt) {
+    const groqApiKey = getGroqApiKey();
+    if (!groqApiKey) return { success: false, error: 'No Groq API key configured' };
 
-    const apiKey = getApiKey();
-    if (!apiKey) {
-        return { success: false, error: 'No API key configured' };
+    const textPrompt = prompt || 'Describe what you see in this screenshot and answer any question shown.';
+    console.log('Sending image to Groq vision (llama-4-scout)...');
+
+    try {
+        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${groqApiKey}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+                messages: [
+                    { role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' },
+                    {
+                        role: 'user',
+                        content: [
+                            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64Data}` } },
+                            { type: 'text', text: textPrompt },
+                        ],
+                    },
+                ],
+                stream: true,
+                temperature: 0.2,
+                max_tokens: 1024,
+            }),
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            return { success: false, error: `Groq vision error: ${response.status} ${errorText}` };
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullText = '';
+        let isFirst = true;
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            for (const line of decoder.decode(value, { stream: true }).split('\n')) {
+                if (!line.startsWith('data: ')) continue;
+                const data = line.slice(6);
+                if (data === '[DONE]') continue;
+                try {
+                    const token = JSON.parse(data).choices?.[0]?.delta?.content || '';
+                    if (token) {
+                        fullText += token;
+                        sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
+                        isFirst = false;
+                    }
+                } catch {}
+            }
+        }
+
+        console.log('Groq vision response completed');
+        saveScreenAnalysis(textPrompt, fullText, 'llama-4-scout-17b-16e-instruct');
+        return { success: true, text: fullText, model: 'llama-4-scout' };
+    } catch (error) {
+        console.error('Error sending image to Groq:', error);
+        return { success: false, error: error.message };
     }
+}
+
+async function sendImageToGeminiHttp(base64Data, prompt) {
+    const apiKey = getApiKey();
+
+    // No Gemini key → go straight to Groq vision
+    if (!apiKey) {
+        return sendImageToGroq(base64Data, prompt);
+    }
+
+    const model = getAvailableModel();
 
     try {
         const ai = new GoogleGenAI({ apiKey: apiKey });
 
         const contents = [
-            {
-                inlineData: {
-                    mimeType: 'image/jpeg',
-                    data: base64Data,
-                },
-            },
+            { inlineData: { mimeType: 'image/jpeg', data: base64Data } },
             { text: prompt },
         ];
 
@@ -1013,31 +1078,27 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
             },
         });
 
-        // Increment count after successful call
         incrementLimitCount(model);
 
-        // Stream the response
         let fullText = '';
         let isFirst = true;
         for await (const chunk of response) {
             const chunkText = chunk.text;
             if (chunkText) {
                 fullText += chunkText;
-                // Send to renderer - new response for first chunk, update for subsequent
                 sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
                 isFirst = false;
             }
         }
 
         console.log(`Image response completed from ${model}`);
-
-        // Save screen analysis to history
         saveScreenAnalysis(prompt, fullText, model);
-
         return { success: true, text: fullText, model: model };
     } catch (error) {
         console.error('Error sending image to Gemini HTTP:', error);
-        return { success: false, error: error.message };
+        // Fallback to Groq vision on Gemini failure
+        console.log('Falling back to Groq vision...');
+        return sendImageToGroq(base64Data, prompt);
     }
 }
 
@@ -1456,6 +1517,7 @@ module.exports = {
     convertStereoToMono,
     stopMacOSAudioCapture,
     sendAudioToGemini,
+    sendImageToGroq,
     sendImageToGeminiHttp,
     setupGeminiIpcHandlers,
     formatSpeakerResults,
