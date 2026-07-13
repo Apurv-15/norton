@@ -3,6 +3,9 @@ const path = require('node:path');
 const storage = require('../storage');
 
 let mouseEventsIgnored = false;
+let mcqOverlayWindow = null;
+let mainWindowRef = null;
+let _hiddenAt = null;
 
 const DEFAULT_MAIN_WINDOW_SIZE = { width: 1100, height: 800 };
 const MIN_WINDOW_SIZE = { width: 700, height: 320 };
@@ -23,10 +26,12 @@ function createWindow(sendToRenderer, geminiSessionRef) {
             // Check if the center of the saved bounds is inside the display
             const centerX = savedBounds.x + savedBounds.width / 2;
             const centerY = savedBounds.y + savedBounds.height / 2;
-            return centerX >= displayBounds.x &&
-                   centerX <= displayBounds.x + displayBounds.width &&
-                   centerY >= displayBounds.y &&
-                   centerY <= displayBounds.y + displayBounds.height;
+            return (
+                centerX >= displayBounds.x &&
+                centerX <= displayBounds.x + displayBounds.width &&
+                centerY >= displayBounds.y &&
+                centerY <= displayBounds.y + displayBounds.height
+            );
         });
 
         if (isVisible) {
@@ -60,6 +65,7 @@ function createWindow(sendToRenderer, geminiSessionRef) {
         },
         backgroundColor: '#00000000',
     });
+    mainWindowRef = mainWindow;
 
     const { session, desktopCapturer } = require('electron');
     session.defaultSession.setDisplayMediaRequestHandler(
@@ -97,6 +103,7 @@ function createWindow(sendToRenderer, geminiSessionRef) {
     }
 
     mainWindow.loadFile(path.join(__dirname, '../index.html'));
+    mainWindow.setTitle('System Helper'); // ponytail: innocuous name in Task Manager / Activity Monitor
 
     // After window is created, initialize keybinds
     mainWindow.webContents.once('dom-ready', () => {
@@ -127,6 +134,24 @@ function createWindow(sendToRenderer, geminiSessionRef) {
 
     mainWindow.on('resize', saveBounds);
     mainWindow.on('move', saveBounds);
+
+    mainWindow.on('hide', () => {
+        _hiddenAt = Date.now();
+        if (mcqOverlayWindow && !mcqOverlayWindow.isDestroyed()) {
+            mcqOverlayWindow.webContents.send('main-window-visibility', false);
+        }
+    });
+    mainWindow.on('show', () => {
+        const hiddenFor = _hiddenAt ? Date.now() - _hiddenAt : 0;
+        _hiddenAt = null;
+        if (mcqOverlayWindow && !mcqOverlayWindow.isDestroyed()) {
+            mcqOverlayWindow.webContents.send('main-window-visibility', true);
+        }
+        // ponytail: small delay lets Windows renderer finish painting before receiving IPC
+        setTimeout(() => {
+            mainWindow.webContents.send('window-shown', { hiddenFor });
+        }, 80);
+    });
 
     setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef);
 
@@ -368,13 +393,52 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
             } else {
                 mainWindow.showInactive();
             }
+            if (mcqOverlayWindow && !mcqOverlayWindow.isDestroyed()) {
+                mcqOverlayWindow.webContents.send('main-window-visibility', mainWindow.isVisible());
+            }
             return { success: true };
         } catch (error) {
             console.error('Error toggling window visibility:', error);
             return { success: false, error: error.message };
         }
     });
+}
 
+function createMcqOverlay() {
+    if (mcqOverlayWindow && !mcqOverlayWindow.isDestroyed()) return mcqOverlayWindow;
+
+    const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+    mcqOverlayWindow = new BrowserWindow({
+        x: Math.round(width / 2 - 210),
+        y: height - 70,
+        width: 420,
+        height: 58,
+        frame: false,
+        transparent: true,
+        alwaysOnTop: true,
+        hasShadow: false,
+        resizable: false,
+        skipTaskbar: true,
+        webPreferences: { nodeIntegration: true, contextIsolation: false },
+    });
+    mcqOverlayWindow.setContentProtection(true);
+    mcqOverlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    if (process.platform === 'win32') mcqOverlayWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+    mcqOverlayWindow.loadFile(path.join(__dirname, '../assets/mcq-overlay.html'));
+    mcqOverlayWindow.setTitle('System Helper');
+    mcqOverlayWindow.webContents.once('dom-ready', () => {
+        const isVisible = mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef.isVisible() : true;
+        mcqOverlayWindow.webContents.send('main-window-visibility', isVisible);
+    });
+    mcqOverlayWindow.on('closed', () => {
+        mcqOverlayWindow = null;
+    });
+    return mcqOverlayWindow;
+}
+
+function destroyMcqOverlay() {
+    if (mcqOverlayWindow && !mcqOverlayWindow.isDestroyed()) mcqOverlayWindow.close();
+    mcqOverlayWindow = null;
 }
 
 module.exports = {
@@ -382,4 +446,7 @@ module.exports = {
     getDefaultKeybinds,
     updateGlobalShortcuts,
     setupWindowIpcHandlers,
+    createMcqOverlay,
+    destroyMcqOverlay,
+    getMcqOverlayWindow: () => mcqOverlayWindow,
 };

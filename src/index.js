@@ -12,7 +12,7 @@ process.stderr.on('error', err => {
 });
 
 const { app, BrowserWindow, shell, ipcMain, dialog } = require('electron');
-const { createWindow, updateGlobalShortcuts } = require('./utils/window');
+const { createWindow, updateGlobalShortcuts, createMcqOverlay, destroyMcqOverlay } = require('./utils/window');
 const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = require('./utils/gemini');
 const storage = require('./storage');
 const { extractTextFromPDF } = require('./utils/pdfProcessor');
@@ -335,6 +335,16 @@ function setupStorageIpcHandlers() {
             console.error('Error in cv:clear handler:', error);
             return { success: false, error: error.message };
         }
+    });
+
+    ipcMain.handle('start-mcq-overlay', async () => {
+        try { createMcqOverlay(); return { success: true }; }
+        catch (e) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('stop-mcq-overlay', async () => {
+        try { destroyMcqOverlay(); return { success: true }; }
+        catch (e) { return { success: false, error: e.message }; }
     });
 }
 

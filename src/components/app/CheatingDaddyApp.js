@@ -324,6 +324,7 @@ export class CheatingDaddyApp extends LitElement {
             color: var(--text-primary);
         }
 
+
         /* Content inner */
         .content-inner {
             flex: 1;
@@ -571,7 +572,11 @@ export class CheatingDaddyApp extends LitElement {
             if (window.require) {
                 const { ipcRenderer } = window.require('electron');
                 await ipcRenderer.invoke('close-session');
+                if (this.selectedProfile === 'mcq') {
+                    ipcRenderer.invoke('stop-mcq-overlay');
+                }
             }
+            window.currentAppMode = null;
             this.sessionActive = false;
             this._stopTimer();
             this.currentView = 'main';
@@ -651,6 +656,15 @@ export class CheatingDaddyApp extends LitElement {
         this.sessionActive = true;
         this.currentView = 'assistant';
         this._startTimer();
+
+        // MCQ overlay
+        window.currentAppMode = this.selectedProfile;
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            if (this.selectedProfile === 'mcq') {
+                ipcRenderer.invoke('start-mcq-overlay');
+            }
+        }
     }
 
     async handleAPIKeyHelp() {
@@ -997,6 +1011,7 @@ export class CheatingDaddyApp extends LitElement {
             presentation: 'Presentation',
             negotiation: 'Negotiation',
             exam: 'Exam',
+            mcq: 'MCQ',
         };
 
         return html`

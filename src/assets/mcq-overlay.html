@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: transparent; overflow: hidden; }
+  #pill {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 420px;
+    height: 52px;
+    background: rgba(10, 10, 10, 0.92);
+    border-radius: 26px;
+    border: 1px solid rgba(255,255,255,0.12);
+    padding: 0 20px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    backdrop-filter: blur(12px);
+  }
+  #pill.visible { display: flex; }
+  #letter { color: #4ade80; margin-right: 6px; font-size: 17px; }
+
+  /* Minimalist style when the main window is hidden */
+  #pill.main-hidden {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    padding: 0 !important;
+    justify-content: center;
+  }
+  #pill.main-hidden #letter {
+    color: #4ade80;
+    font-size: 32px;
+    font-weight: 800;
+    margin-right: 0;
+    text-shadow: 0 0 4px rgba(0, 0, 0, 0.8), 0 0 10px rgba(74, 222, 128, 0.4);
+  }
+</style>
+</head>
+<body>
+<div id="pill">
+  <span id="letter"></span>
+  <span id="reason"></span>
+</div>
+<script>
+const { ipcRenderer } = require('electron');
+const pill = document.getElementById('pill');
+const letterEl = document.getElementById('letter');
+const reasonEl = document.getElementById('reason');
+let clearTimer;
+let isMainWindowVisible = true;
+let lastAnswerText = '';
+
+function updateStyles() {
+  if (isMainWindowVisible) {
+    pill.classList.remove('main-hidden');
+    reasonEl.style.display = '';
+  } else {
+    pill.classList.add('main-hidden');
+    reasonEl.style.display = 'none';
+  }
+}
+
+ipcRenderer.on('main-window-visibility', (e, visible) => {
+  isMainWindowVisible = visible;
+  updateStyles();
+  // Re-process last received text under the new visibility mode
+  if (lastAnswerText) {
+    processAnswer(lastAnswerText);
+  }
+});
+
+function processAnswer(text) {
+  if (!text || !text.trim()) return;
+  
+  // Parse option: e.g. "B) reason", "[B] reason", "2. reason", or just "A"
+  const m = text.trim().match(/^\[?([A-Ea-e1-5])\]?([\.\)]?\s*|\b)/);
+  if (m) {
+    const option = m[1].toUpperCase();
+    const reasonText = text.trim().replace(/^\[?[A-Ea-e1-5]\]?[\.\)]?\s*/, '');
+    
+    letterEl.textContent = isMainWindowVisible ? option + ')' : option;
+    reasonEl.textContent = reasonText;
+    pill.classList.add('visible');
+  } else {
+    // If main window is visible, show the raw text as fallback.
+    // If main window is hidden, do NOT show arbitrary/status text
+    if (isMainWindowVisible) {
+      letterEl.textContent = '';
+      reasonEl.textContent = text.trim();
+      pill.classList.add('visible');
+    } else {
+      pill.classList.remove('visible');
+    }
+  }
+}
+
+ipcRenderer.on('mcq-answer', (e, text) => {
+  lastAnswerText = text;
+  processAnswer(text);
+  
+  if (clearTimer) clearTimeout(clearTimer);
+  clearTimer = setTimeout(() => {
+    pill.classList.remove('visible');
+    lastAnswerText = '';
+  }, 30000);
+});
+</script>
+</body>
+</html>

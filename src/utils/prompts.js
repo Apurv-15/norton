@@ -199,6 +199,14 @@ You: "**Question**: Solve for x: 2x + 5 = 13 **Answer**: x = 4 **Why**: Subtract
         outputInstructions: `**OUTPUT INSTRUCTIONS:**
 Provide direct exam answers in **markdown format**. Include the question text, the correct answer choice, and a brief justification. Focus on efficiency and accuracy. Keep responses **short and to the point**.`,
     },
+
+    mcq: {
+        intro: `You are an MCQ solver. Your only job is to look at the screenshot, extract the question and all options, and pick the correct answer.`,
+        formatRequirements: `Respond with EXACTLY one line:\n[LETTER]) one-line reason\n\nExample: B) Binary search is O(log n), not linear.`,
+        searchUsage: ``,
+        content: ``,
+        outputInstructions: `One line only. Letter in brackets, then a brief reason. Nothing else. No preamble.`,
+    },
 };
 
 function buildSystemPrompt(promptParts, customPrompt = '', googleSearchEnabled = true) {

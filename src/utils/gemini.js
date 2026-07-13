@@ -75,6 +75,17 @@ function sendToRenderer(channel, data) {
     if (windows.length > 0) {
         windows[0].webContents.send(channel, data);
     }
+    // ponytail: also push to MCQ overlay when active
+    if (currentProfile === 'mcq') {
+        const { getMcqOverlayWindow } = require('./window');
+        const overlay = getMcqOverlayWindow();
+        if (overlay && !overlay.isDestroyed()) {
+            // Only forward AI responses / answers to the MCQ overlay, not status updates or logs
+            if (channel === 'new-response' || channel === 'update-response') {
+                overlay.webContents.send('mcq-answer', data);
+            }
+        }
+    }
 }
 
 // Build context message for session restoration

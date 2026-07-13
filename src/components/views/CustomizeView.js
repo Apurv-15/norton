@@ -251,6 +251,7 @@ export class CustomizeView extends LitElement {
             { value: 'presentation', name: 'Presentation' },
             { value: 'negotiation', name: 'Negotiation' },
             { value: 'exam', name: 'Exam Assistant' },
+            { value: 'mcq', name: 'MCQ Auto-Solve' },
         ];
     }
 

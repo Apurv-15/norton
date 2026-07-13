@@ -992,6 +992,13 @@ export class MainView extends LitElement {
                 </div>
             </div>
 
+            <div class="form-group">
+                <label class="form-label">Mode</label>
+                <select @change=${this._handleProfileChange}>
+                    ${[['interview','Job Interview'],['sales','Sales Call'],['meeting','Business Meeting'],['presentation','Presentation'],['negotiation','Negotiation'],['exam','Exam Assistant'],['mcq','MCQ Auto-Solve']].map(([v,l]) => html`<option value=${v} ?selected=${this.selectedProfile === v}>${l}</option>`)}
+                </select>
+            </div>
+
             ${this._renderStartButton()} ${this._renderDivider()}
 
             <!-- Cloud promo intentionally removed from the active UI. -->

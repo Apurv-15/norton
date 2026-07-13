@@ -412,6 +412,48 @@ export class AssistantView extends LitElement {
             from { opacity: 0.3; }
             to { opacity: 1; }
         }
+
+        .ghost-hint {
+            font-size: 10px;
+            color: rgba(255, 255, 255, 0.12);
+            text-align: center;
+            padding: 2px 0 4px;
+            pointer-events: none;
+            user-select: none;
+        }
+
+        .mode-toggle {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            font-size: 10px;
+            font-family: var(--font-mono);
+        }
+
+        .mode-toggle-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 10px;
+            font-family: var(--font-mono);
+            padding: 0 3px;
+            cursor: pointer;
+            opacity: 0.4;
+            transition: opacity var(--transition), color var(--transition);
+            line-height: 1;
+        }
+
+        .mode-toggle-btn.active {
+            color: var(--text-primary);
+            opacity: 0.9;
+        }
+
+        .mode-sep {
+            color: var(--text-muted);
+            opacity: 0.3;
+            font-size: 10px;
+            pointer-events: none;
+        }
     `;
 
     static properties = {
@@ -423,6 +465,8 @@ export class AssistantView extends LitElement {
         isAnalyzing: { type: Boolean, state: true },
         audioCaptureMode: { type: String },
         isManualRecording: { type: Boolean },
+        _inputMode: { state: true },
+        _ghostHint: { state: true },
     };
 
     constructor() {
@@ -435,6 +479,9 @@ export class AssistantView extends LitElement {
         this._animFrame = null;
         this.audioCaptureMode = 'auto';
         this.isManualRecording = false;
+        this._inputMode = 'text';
+        this._ghostHint = false;
+        this._ghostTimer = null;
     }
 
     toggleAudioCaptureMode(mode) {
@@ -573,6 +620,26 @@ export class AssistantView extends LitElement {
             ipcRenderer.on('navigate-next-response', this.handleNextResponse);
             ipcRenderer.on('scroll-response-up', this.handleScrollUp);
             ipcRenderer.on('scroll-response-down', this.handleScrollDown);
+
+            this.handleWindowShown = (_, { hiddenFor }) => {
+                if (this._inputMode === 'ss') {
+                    if (window.captureManualScreenshot) window.captureManualScreenshot();
+                } else {
+                    const { clipboard } = window.require('electron');
+                    const text = clipboard.readText().trim();
+                    if (text) this.onSendText(text);
+                }
+                if (hiddenFor >= 5000) {
+                    this._ghostHint = true;
+                    this.requestUpdate();
+                    clearTimeout(this._ghostTimer);
+                    this._ghostTimer = setTimeout(() => {
+                        this._ghostHint = false;
+                        this.requestUpdate();
+                    }, 4000);
+                }
+            };
+            ipcRenderer.on('window-shown', this.handleWindowShown);
         }
     }
 
@@ -586,7 +653,9 @@ export class AssistantView extends LitElement {
             if (this.handleNextResponse) ipcRenderer.removeListener('navigate-next-response', this.handleNextResponse);
             if (this.handleScrollUp) ipcRenderer.removeListener('scroll-response-up', this.handleScrollUp);
             if (this.handleScrollDown) ipcRenderer.removeListener('scroll-response-down', this.handleScrollDown);
+            if (this.handleWindowShown) ipcRenderer.removeListener('window-shown', this.handleWindowShown);
         }
+        clearTimeout(this._ghostTimer);
     }
 
     async handleSendText() {
@@ -858,6 +927,11 @@ export class AssistantView extends LitElement {
                 <div class="input-bar-inner">
                     <input type="text" id="textInput" placeholder="Type a message..." @keydown=${this.handleTextKeydown} />
                 </div>
+                <div class="mode-toggle">
+                    <button class="mode-toggle-btn ${this._inputMode === 'text' ? 'active' : ''}" @click=${() => { this._inputMode = 'text'; }}>txt</button>
+                    <span class="mode-sep">/</span>
+                    <button class="mode-toggle-btn ${this._inputMode === 'ss' ? 'active' : ''}" @click=${() => { this._inputMode = 'ss'; }}>ss</button>
+                </div>
                 <button class="analyze-btn ${this.isAnalyzing ? 'analyzing' : ''}" @click=${this.handleScreenAnswer}>
                     <canvas class="analyze-canvas"></canvas>
                     <span class="analyze-btn-content">
@@ -875,6 +949,7 @@ export class AssistantView extends LitElement {
                     </span>
                 </button>
             </div>
+            ${this._ghostHint ? html`<div class="ghost-hint">clipboard pasted ↑</div>` : ''}
         `;
     }
 }
