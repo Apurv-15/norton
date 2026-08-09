@@ -93,3 +93,7 @@ typings/
 out/
 .specstory
 .specstory/
+
+# Portable config user files
+portable-config/*
+!portable-config/.gitkeep

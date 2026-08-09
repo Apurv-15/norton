@@ -9,6 +9,7 @@ import { AICustomizeView } from '../views/AICustomizeView.js';
 import { FeedbackView } from '../views/FeedbackView.js';
 import { AdvancedView } from '../views/AdvancedView.js';
 import { CVUploadView } from '../views/CVUploadView.js';
+import { SystemDesignView } from '../views/SystemDesignView.js';
 
 export class CheatingDaddyApp extends LitElement {
     static styles = css`
@@ -324,7 +325,6 @@ export class CheatingDaddyApp extends LitElement {
             color: var(--text-primary);
         }
 
-
         /* Content inner */
         .content-inner {
             flex: 1;
@@ -363,6 +363,444 @@ export class CheatingDaddyApp extends LitElement {
         ::-webkit-scrollbar-thumb:hover {
             background: #444444;
         }
+
+        /* --- Norton Security Overlay Styles --- */
+        .norton-mini-btn {
+            position: fixed !important;
+            bottom: 20px !important;
+            right: 20px !important;
+            z-index: 999999999 !important;
+            background: #11294a !important;
+            border: 2px solid #e0a900 !important;
+            color: #ffffff !important;
+            padding: 10px 16px !important;
+            border-radius: 30px !important;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important;
+            font-size: 13px !important;
+            font-weight: 600 !important;
+            cursor: pointer !important;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3) !important;
+            display: flex !important;
+            align-items: center !important;
+            gap: 8px !important;
+            transition: all 0.2s ease-in-out !important;
+            user-select: none !important;
+        }
+
+        .norton-mini-btn:hover {
+            transform: translateY(-2px) scale(1.03) !important;
+            box-shadow: 0 6px 20px rgba(224, 169, 0, 0.4) !important;
+            background: #183a68 !important;
+        }
+
+        .norton-overlay-backdrop {
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            background: rgba(0, 0, 0, 0.75) !important;
+            backdrop-filter: blur(5px) !important;
+            z-index: 1000000000 !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            font-family: 'Segoe UI', Arial, sans-serif !important;
+        }
+
+        .norton-window {
+            width: 820px !important;
+            height: 520px !important;
+            background: #ffffff !important;
+            border-radius: 4px !important;
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.6) !important;
+            display: flex !important;
+            flex-direction: column !important;
+            overflow: hidden !important;
+            border: 1px solid #444 !important;
+            position: relative !important;
+        }
+
+        /* Header styling */
+        .norton-header {
+            background: #162a45 !important;
+            height: 40px !important;
+            min-height: 40px !important;
+            color: #ffffff !important;
+            display: flex !important;
+            justify-content: space-between !important;
+            align-items: center !important;
+            padding: 0 15px !important;
+            user-select: none !important;
+            border-bottom: 1px solid #112137 !important;
+        }
+
+        .norton-header-left {
+            display: flex !important;
+            align-items: center !important;
+            gap: 8px !important;
+        }
+
+        .norton-header-logo-icon {
+            width: 20px !important;
+            height: 20px !important;
+            background: #ffd000 !important;
+            border-radius: 50% !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            color: #162a45 !important;
+            font-weight: 900 !important;
+            font-size: 14px !important;
+        }
+
+        .norton-header-title {
+            font-size: 15px !important;
+            font-weight: bold !important;
+            color: #fff !important;
+        }
+
+        .norton-header-title span {
+            font-weight: normal !important;
+            color: #aaa !important;
+            margin-left: 5px !important;
+        }
+
+        .norton-header-right {
+            display: flex !important;
+            align-items: center !important;
+            gap: 20px !important;
+        }
+
+        .norton-account-btn {
+            font-size: 13px !important;
+            color: #ddd !important;
+            cursor: pointer !important;
+        }
+
+        .norton-account-btn:hover {
+            color: #fff !important;
+        }
+
+        .norton-window-controls {
+            display: flex !important;
+            gap: 12px !important;
+        }
+
+        .norton-ctrl-btn {
+            width: 12px !important;
+            height: 12px !important;
+            font-size: 10px !important;
+            color: #aaa !important;
+            cursor: pointer !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+        }
+
+        .norton-ctrl-btn:hover {
+            color: #fff !important;
+        }
+
+        /* Secondary header (menus) */
+        .norton-menu-bar {
+            height: 35px !important;
+            background: #f3f3f3 !important;
+            border-bottom: 1px solid #e1e1e1 !important;
+            display: flex !important;
+            justify-content: flex-end !important;
+            align-items: center !important;
+            padding: 0 15px !important;
+            gap: 15px !important;
+            font-size: 12px !important;
+            color: #555 !important;
+        }
+
+        .norton-menu-item {
+            cursor: pointer !important;
+            display: flex !important;
+            align-items: center !important;
+            gap: 4px !important;
+        }
+
+        .norton-menu-item:hover {
+            color: #000 !important;
+        }
+
+        /* Body Content Area */
+        .norton-body {
+            flex: 1 !important;
+            display: flex !important;
+            flex-direction: column !important;
+            padding: 20px 25px !important;
+            position: relative !important;
+            background: #ffffff !important;
+        }
+
+        /* Standard Status View */
+        .norton-status-view {
+            display: flex !important;
+            flex-direction: column !important;
+            flex: 1 !important;
+        }
+
+        .norton-perf-row {
+            display: flex !important;
+            align-items: center !important;
+            gap: 35px !important;
+            margin-bottom: 25px !important;
+        }
+
+        .norton-dial-container {
+            position: relative !important;
+            width: 130px !important;
+            height: 130px !important;
+        }
+
+        .norton-dial-svg {
+            transform: rotate(-90deg) !important;
+        }
+
+        .norton-dial-bg {
+            fill: none !important;
+            stroke: #eee !important;
+            stroke-width: 10 !important;
+        }
+
+        .norton-dial-fill {
+            fill: none !important;
+            stroke: #2fa13c !important;
+            stroke-width: 10 !important;
+            stroke-linecap: round !important;
+            stroke-dasharray: 314 !important;
+            stroke-dashoffset: 60 !important;
+        }
+
+        .norton-dial-needle {
+            position: absolute !important;
+            width: 2px !important;
+            height: 55px !important;
+            background: #2fa13c !important;
+            top: 10px !important;
+            left: 64px !important;
+            transform-origin: bottom center !important;
+            transform: rotate(60deg) !important;
+        }
+
+        .norton-status-text {
+            flex: 1 !important;
+        }
+
+        .norton-status-headline {
+            font-size: 26px !important;
+            color: #2fa13c !important;
+            margin: 0 0 10px 0 !important;
+            font-weight: 300 !important;
+        }
+
+        .norton-status-detail {
+            font-size: 13px !important;
+            color: #555 !important;
+            margin: 4px 0 !important;
+            display: flex !important;
+            align-items: center !important;
+            gap: 8px !important;
+        }
+
+        .norton-status-val-green {
+            color: #2fa13c !important;
+            font-weight: 600 !important;
+        }
+
+        .norton-status-val-blue {
+            color: #0078d4 !important;
+            font-weight: 600 !important;
+        }
+
+        .norton-status-val-red {
+            color: #d11a2a !important;
+            font-weight: 600 !important;
+        }
+
+        /* 4 Action Cards Row */
+        .norton-action-cards {
+            display: grid !important;
+            grid-template-columns: repeat(4, 1fr) !important;
+            gap: 15px !important;
+            margin-top: auto !important;
+            margin-bottom: 10px !important;
+        }
+
+        .norton-card {
+            border: 1px solid #eaeaea !important;
+            border-radius: 4px !important;
+            padding: 15px 10px !important;
+            text-align: center !important;
+            cursor: pointer !important;
+            transition: all 0.15s ease-in-out !important;
+            background: #fafafa !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            gap: 10px !important;
+        }
+
+        .norton-card:hover {
+            background: #f0f4f9 !important;
+            border-color: #bcd1e6 !important;
+            transform: translateY(-2px) !important;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05) !important;
+        }
+
+        .norton-card-icon {
+            width: 32px !important;
+            height: 32px !important;
+            color: #666 !important;
+        }
+
+        .norton-card:hover .norton-card-icon {
+            color: #1a365d !important;
+        }
+
+        .norton-card-label {
+            font-size: 12px !important;
+            color: #333 !important;
+            font-weight: 500 !important;
+        }
+
+        /* Key Entry Mode Screen */
+        .norton-key-view {
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            justify-content: center !important;
+            flex: 1 !important;
+        }
+
+        .norton-lock-icon {
+            width: 60px !important;
+            height: 60px !important;
+            color: #e0a900 !important;
+            margin-bottom: 20px !important;
+        }
+
+        .norton-key-title {
+            font-size: 24px !important;
+            font-weight: 600 !important;
+            color: #162a45 !important;
+            margin: 0 0 8px 0 !important;
+        }
+
+        .norton-key-subtitle {
+            font-size: 14px !important;
+            color: #666 !important;
+            margin: 0 0 24px 0 !important;
+        }
+
+        .norton-key-input-container {
+            width: 320px !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            gap: 15px !important;
+        }
+
+        .norton-key-input {
+            width: 100% !important;
+            padding: 12px 16px !important;
+            border: 2px solid #ccc !important;
+            border-radius: 6px !important;
+            font-size: 16px !important;
+            text-align: center !important;
+            font-family: monospace !important;
+            letter-spacing: 2px !important;
+            transition: border-color 0.2s !important;
+            color: #333 !important;
+            background: #fff !important;
+            outline: none !important;
+        }
+
+        .norton-key-input:focus {
+            border-color: #162a45 !important;
+            box-shadow: 0 0 0 3px rgba(22, 42, 69, 0.15) !important;
+        }
+
+        .norton-key-error {
+            color: #d83b01 !important;
+            font-size: 12px !important;
+            min-height: 16px !important;
+        }
+
+        /* Bottom Tabs Bar */
+        .norton-bottom-bar {
+            height: 48px !important;
+            min-height: 48px !important;
+            background: #eaeaea !important;
+            display: flex !important;
+            border-top: 1px solid #dcdcdc !important;
+        }
+
+        .norton-bottom-tab {
+            flex: 1 !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            font-size: 13px !important;
+            color: #555 !important;
+            cursor: pointer !important;
+            border-right: 1px solid #dcdcdc !important;
+            font-weight: 500 !important;
+            user-select: none !important;
+        }
+
+        .norton-bottom-tab:last-child {
+            border-right: none !important;
+        }
+
+        .norton-bottom-tab:hover {
+            background: #f2f2f2 !important;
+            color: #000 !important;
+        }
+
+        .norton-bottom-tab.active {
+            background: #ffffff !important;
+            color: #000 !important;
+            font-weight: bold !important;
+            position: relative !important;
+        }
+
+        .norton-bottom-tab.active::after {
+            content: '' !important;
+            position: absolute !important;
+            top: -1px !important;
+            left: 0 !important;
+            right: 0 !important;
+            height: 3px !important;
+            background: #e0a900 !important;
+            border-radius: 0;
+        }
+
+        /* Subscription status bar */
+        .norton-sub-bar {
+            height: 32px !important;
+            background: #ffffff !important;
+            border-top: 1px solid #eaeaea !important;
+            display: flex !important;
+            align-items: center !important;
+            padding: 0 15px !important;
+            font-size: 11px !important;
+            color: #666 !important;
+        }
+
+        .norton-sub-status-val {
+            color: #2fa13c !important;
+            font-weight: bold !important;
+            margin-left: 5px !important;
+        }
+
+        .norton-sub-status-val.inactive {
+            color: #d11a2a !important;
+        }
     `;
 
     static properties = {
@@ -390,6 +828,8 @@ export class CheatingDaddyApp extends LitElement {
         cvFilename: { type: String },
         cvCharCount: { type: Number },
         appMode: { type: String },
+        nortonModeActive: { type: Boolean },
+        nortonShowKeyEntry: { type: Boolean },
     };
 
     constructor() {
@@ -421,6 +861,8 @@ export class CheatingDaddyApp extends LitElement {
         this.cvFilename = '';
         this.cvCharCount = 0;
         this.appMode = 'interview';
+        this.nortonModeActive = false;
+        this.nortonShowKeyEntry = false;
 
         this._loadFromStorage();
         this._checkForUpdates();
@@ -462,6 +904,8 @@ export class CheatingDaddyApp extends LitElement {
             this.cvFilename = prefs.cvFilename || '';
             this.cvCharCount = (prefs.cvText || '').length;
             this.appMode = prefs.appMode || 'interview';
+            this.nortonModeActive = prefs.nortonModeActive || false;
+            this.nortonShowKeyEntry = prefs.nortonShowKeyEntry || false;
 
             this._storageLoaded = true;
             this.requestUpdate();
@@ -487,6 +931,13 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.on('whisper-downloading', (_, downloading) => {
                 this._whisperDownloading = downloading;
             });
+            ipcRenderer.on('toggle-norton-mode', () => {
+                this.nortonModeActive = !this.nortonModeActive;
+                this.nortonShowKeyEntry = false;
+                this.requestUpdate();
+                cheatingDaddy.storage.updatePreference('nortonModeActive', this.nortonModeActive);
+                cheatingDaddy.storage.updatePreference('nortonShowKeyEntry', false);
+            });
         }
     }
 
@@ -501,6 +952,7 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.removeAllListeners('click-through-toggled');
             ipcRenderer.removeAllListeners('reconnect-failed');
             ipcRenderer.removeAllListeners('whisper-downloading');
+            ipcRenderer.removeAllListeners('toggle-norton-mode');
         }
     }
 
@@ -826,6 +1278,9 @@ export class CheatingDaddyApp extends LitElement {
             case 'history':
                 return html`<history-view></history-view>`;
 
+            case 'system-design':
+                return html`<system-design-view></system-design-view>`;
+
             case 'advanced':
                 return html`
                     <advanced-view
@@ -939,6 +1394,31 @@ export class CheatingDaddyApp extends LitElement {
                 </svg>`,
             },
             {
+                id: 'system-design',
+                label: 'System Design',
+                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+                        <rect x="3" y="3" width="7" height="7" rx="1" />
+                        <rect x="14" y="3" width="7" height="7" rx="1" />
+                        <rect x="14" y="14" width="7" height="7" rx="1" />
+                        <rect x="3" y="14" width="7" height="7" rx="1" />
+                    </g>
+                </svg>`,
+            },
+            {
+                id: 'chatgpt-window',
+                label: 'ChatGPT',
+                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                    </g>
+                </svg>`,
+                action: () => {
+                    const { ipcRenderer } = window.require('electron');
+                    ipcRenderer.invoke('chatgpt-window:toggle');
+                },
+            },
+            {
                 id: 'feedback',
                 label: 'Feedback',
                 icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
@@ -970,7 +1450,7 @@ export class CheatingDaddyApp extends LitElement {
                         item => html`
                             <button
                                 class="nav-item ${this.currentView === item.id ? 'active' : ''}"
-                                @click=${() => this.navigate(item.id)}
+                                @click=${() => (item.action ? item.action() : this.navigate(item.id))}
                                 title=${item.label}
                             >
                                 ${item.icon} ${item.label}
@@ -979,23 +1459,25 @@ export class CheatingDaddyApp extends LitElement {
                     )}
                 </nav>
                 <div class="sidebar-footer">
-                    ${this._updateAvailable
-                        ? html`
-                              <button class="update-btn" @click=${() => this.handleExternalLinkClick('https://cheatingdaddy.com/download')}>
-                                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-                                      <path
-                                          fill="none"
-                                          stroke="currentColor"
-                                          stroke-linecap="round"
-                                          stroke-linejoin="round"
-                                          stroke-width="2"
-                                          d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 11l5 5l5-5m-5-7v12"
-                                      />
-                                  </svg>
-                                  Update available
-                              </button>
-                          `
-                        : html` <div class="version-text">v${this._localVersion}</div> `}
+                    ${
+                        this._updateAvailable
+                            ? html`
+                                  <button class="update-btn" @click=${() => this.handleExternalLinkClick('https://cheatingdaddy.com/download')}>
+                                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                                          <path
+                                              fill="none"
+                                              stroke="currentColor"
+                                              stroke-linecap="round"
+                                              stroke-linejoin="round"
+                                              stroke-width="2"
+                                              d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 11l5 5l5-5m-5-7v12"
+                                          />
+                                      </svg>
+                                      Update available
+                                  </button>
+                              `
+                            : html` <div class="version-text">v${this._localVersion}</div> `
+                    }
                 </div>
             </div>
         `;
@@ -1011,6 +1493,7 @@ export class CheatingDaddyApp extends LitElement {
             presentation: 'Presentation',
             negotiation: 'Negotiation',
             exam: 'Exam',
+            dsa: 'DSA Interview',
             mcq: 'MCQ',
         };
 
@@ -1032,10 +1515,277 @@ export class CheatingDaddyApp extends LitElement {
                     ${this.statusText ? html`<span class="live-bar-text">${this.statusText}</span>` : ''}
                     <span class="live-bar-text">${this.getElapsedTime()}</span>
                     ${this._isClickThrough ? html`<span class="live-bar-text">[click through]</span>` : ''}
+                    <span
+                        class="live-bar-text clickable"
+                        style="margin-right: 8px;"
+                        @click=${() => {
+                        this.nortonModeActive = true;
+                        this.nortonShowKeyEntry = false;
+                        this.requestUpdate();
+                    }}
+                        title="Enter Norton Mode"
+                        >🛡️</span
+                    >
                     <span class="live-bar-text clickable" @click=${() => this.handleHideToggle()}>[hide]</span>
                 </div>
             </div>
         `;
+    }
+
+    renderNortonOverlay() {
+        return html`
+            <div class="norton-overlay-backdrop">
+                <div class="norton-window">
+                    <div class="norton-header">
+                        <div class="norton-header-left">
+                            <div class="norton-header-logo-icon">✓</div>
+                            <div class="norton-header-title">Norton<span>Security</span></div>
+                        </div>
+                        <div class="norton-header-right">
+                            <div class="norton-account-btn">My Account ▾</div>
+                            <div class="norton-window-controls">
+                                <div class="norton-ctrl-btn" @click=${() => this._handleNortonMinimize()} id="norton-minimize">－</div>
+                                <div class="norton-ctrl-btn" @click=${() => this._handleNortonMinimize()} id="norton-maximize">⤢</div>
+                                <div class="norton-ctrl-btn" @click=${() => this._handleNortonClose()} id="norton-close">✕</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="norton-menu-bar">
+                        <div class="norton-menu-item">📅 Report Card</div>
+                        <div class="norton-menu-item">⚙️ Settings</div>
+                        <div class="norton-menu-item">❓ Help</div>
+                        <div class="norton-menu-item">🔍</div>
+                    </div>
+
+                    <div class="norton-body">
+                        ${
+                            !this.nortonShowKeyEntry
+                                ? html`
+                                      <!-- Standard Status View -->
+                                      <div class="norton-status-view" id="norton-status-view">
+                                          <div class="norton-perf-row">
+                                              <div class="norton-dial-container">
+                                                  <svg class="norton-dial-svg" width="130" height="130">
+                                                      <circle class="norton-dial-bg" cx="65" cy="65" r="50"></circle>
+                                                      <circle
+                                                          class="norton-dial-fill"
+                                                          cx="65"
+                                                          cy="65"
+                                                          r="50"
+                                                          style="stroke: #d11a2a !important;"
+                                                      ></circle>
+                                                  </svg>
+                                                  <div
+                                                      class="norton-dial-needle"
+                                                      style="transform: rotate(-45deg) !important; background: #d11a2a !important;"
+                                                  ></div>
+                                              </div>
+                                              <div class="norton-status-text">
+                                                  <h2 class="norton-status-headline" style="color: #d11a2a !important;">Your PC is at risk</h2>
+                                                  <p class="norton-status-detail">
+                                                      Security Status: <span class="norton-status-val-red">Inactive</span>
+                                                  </p>
+                                                  <p class="norton-status-detail">
+                                                      Antivirus Protection: <span class="norton-status-val-red">Disabled</span>
+                                                  </p>
+                                                  <p class="norton-status-detail">
+                                                      CPU Usage: <span class="norton-status-val-blue">Norton 0%</span> |
+                                                      <span class="norton-status-val-green">System 4%</span>
+                                                  </p>
+                                              </div>
+                                          </div>
+
+                                          <div class="norton-action-cards">
+                                              <div
+                                                  class="norton-card"
+                                                  id="norton-opt-disk"
+                                                  @click=${() => {
+                                              this.nortonShowKeyEntry = true;
+                                              this.requestUpdate();
+                                              cheatingDaddy.storage.updatePreference('nortonShowKeyEntry', true);
+                                          }}
+                                              >
+                                                  <svg
+                                                      class="norton-card-icon"
+                                                      viewBox="0 0 24 24"
+                                                      fill="none"
+                                                      stroke="currentColor"
+                                                      stroke-width="2"
+                                                      stroke-linecap="round"
+                                                      stroke-linejoin="round"
+                                                  >
+                                                      <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                                                      <path d="M3 5V19A9 3 0 0 0 21 19V5"></path>
+                                                      <path d="M3 12A9 3 0 0 0 21 12"></path>
+                                                  </svg>
+                                                  <span class="norton-card-label">Optimize Disk</span>
+                                              </div>
+                                              <div
+                                                  class="norton-card"
+                                                  id="norton-file-clean"
+                                                  @click=${() => {
+                                              this.nortonShowKeyEntry = true;
+                                              this.requestUpdate();
+                                              cheatingDaddy.storage.updatePreference('nortonShowKeyEntry', true);
+                                          }}
+                                              >
+                                                  <svg
+                                                      class="norton-card-icon"
+                                                      viewBox="0 0 24 24"
+                                                      fill="none"
+                                                      stroke="currentColor"
+                                                      stroke-width="2"
+                                                      stroke-linecap="round"
+                                                      stroke-linejoin="round"
+                                                  >
+                                                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                                      <polyline points="14 2 14 8 20 8"></polyline>
+                                                      <line x1="12" y1="18" x2="12" y2="12"></line>
+                                                      <line x1="9" y1="15" x2="15" y2="15"></line>
+                                                  </svg>
+                                                  <span class="norton-card-label">File Cleanup</span>
+                                              </div>
+                                              <div
+                                                  class="norton-card"
+                                                  id="norton-startup-mgr"
+                                                  @click=${() => {
+                                              this.nortonShowKeyEntry = true;
+                                              this.requestUpdate();
+                                              cheatingDaddy.storage.updatePreference('nortonShowKeyEntry', true);
+                                          }}
+                                              >
+                                                  <svg
+                                                      class="norton-card-icon"
+                                                      viewBox="0 0 24 24"
+                                                      fill="none"
+                                                      stroke="currentColor"
+                                                      stroke-width="2"
+                                                      stroke-linecap="round"
+                                                      stroke-linejoin="round"
+                                                  >
+                                                      <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
+                                                      <line x1="12" y1="2" x2="12" y2="12"></line>
+                                                  </svg>
+                                                  <span class="norton-card-label">Startup Manager</span>
+                                              </div>
+                                              <div
+                                                  class="norton-card"
+                                                  id="norton-graphs"
+                                                  @click=${() => {
+                                              this.nortonShowKeyEntry = true;
+                                              this.requestUpdate();
+                                              cheatingDaddy.storage.updatePreference('nortonShowKeyEntry', true);
+                                          }}
+                                              >
+                                                  <svg
+                                                      class="norton-card-icon"
+                                                      viewBox="0 0 24 24"
+                                                      fill="none"
+                                                      stroke="currentColor"
+                                                      stroke-width="2"
+                                                      stroke-linecap="round"
+                                                      stroke-linejoin="round"
+                                                  >
+                                                      <line x1="18" y1="20" x2="18" y2="10"></line>
+                                                      <line x1="12" y1="20" x2="12" y2="4"></line>
+                                                      <line x1="6" y1="20" x2="6" y2="14"></line>
+                                                  </svg>
+                                                  <span class="norton-card-label">Graphs</span>
+                                              </div>
+                                          </div>
+                                      </div>
+                                  `
+                                : html`
+                                      <!-- Key Entry View -->
+                                      <div class="norton-key-view" id="norton-key-view">
+                                          <svg
+                                              class="norton-lock-icon"
+                                              viewBox="0 0 24 24"
+                                              fill="none"
+                                              stroke="currentColor"
+                                              stroke-width="2"
+                                              stroke-linecap="round"
+                                              stroke-linejoin="round"
+                                          >
+                                              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                                              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                                          </svg>
+                                          <h2 class="norton-key-title">Purchase Antivirus to start</h2>
+                                          <p class="norton-key-subtitle">Please enter your 16-digit antivirus key to continue</p>
+                                          <div class="norton-key-input-container">
+                                              <input
+                                                  type="text"
+                                                  class="norton-key-input"
+                                                  id="norton-key-input"
+                                                  placeholder="XXXX-XXXX-XXXX-XXXX"
+                                                  maxlength="19"
+                                                  autocomplete="off"
+                                                  @input=${e => this.handleNortonKeyInput(e)}
+                                              />
+                                              <div class="norton-key-error" id="norton-key-error"></div>
+                                          </div>
+                                      </div>
+                                  `
+                        }
+                    </div>
+
+                    <div class="norton-bottom-bar">
+                        <div class="norton-bottom-tab">Security</div>
+                        <div class="norton-bottom-tab">Internet Security</div>
+                        <div class="norton-bottom-tab">Backup</div>
+                        <div class="norton-bottom-tab active">Performance</div>
+                        <div class="norton-bottom-tab">My Norton</div>
+                    </div>
+
+                    <div class="norton-sub-bar">SUBSCRIPTION STATUS: <span class="norton-sub-status-val inactive">Inactive</span></div>
+                </div>
+            </div>
+        `;
+    }
+
+    handleNortonKeyInput(e) {
+        let val = e.target.value;
+        val = val.replace(/[^a-zA-Z0-9]/g, ''); // Keep alphanumeric
+
+        let formatted = '';
+        for (let i = 0; i < val.length && i < 16; i++) {
+            if (i > 0 && i % 4 === 0) {
+                formatted += '-';
+            }
+            formatted += val[i];
+        }
+        e.target.value = formatted.toUpperCase();
+
+        if (val.includes('1525') || formatted.replace(/-/g, '') === '1525') {
+            this.nortonModeActive = false;
+            this.nortonShowKeyEntry = false;
+            this.requestUpdate();
+            cheatingDaddy.storage.updatePreference('nortonModeActive', false);
+            cheatingDaddy.storage.updatePreference('nortonShowKeyEntry', false);
+        }
+    }
+
+    _enterNortonMode() {
+        this.nortonModeActive = true;
+        this.nortonShowKeyEntry = false;
+        this.requestUpdate();
+        cheatingDaddy.storage.updatePreference('nortonModeActive', true);
+        cheatingDaddy.storage.updatePreference('nortonShowKeyEntry', false);
+    }
+
+    async _handleNortonMinimize() {
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            await ipcRenderer.invoke('window-minimize');
+        }
+    }
+
+    async _handleNortonClose() {
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            await ipcRenderer.invoke('quit-application');
+        }
     }
 
     render() {
@@ -1055,6 +1805,15 @@ export class CheatingDaddyApp extends LitElement {
                         <button class="traffic-light maximize" title="Maximize"></button>
                     </div>
                     <div class="drag-region"></div>
+                    <span
+                        class="norton-top-btn"
+                        @click=${() => this._enterNortonMode()}
+                        title="Enter Norton Mode"
+                        style="-webkit-app-region: no-drag; cursor: pointer; padding: 8px 12px; margin-right: 8px; font-size: 14px; opacity: 0.6; transition: opacity 0.2s;"
+                        @mouseover=${e => (e.target.style.opacity = 1)}
+                        @mouseout=${e => (e.target.style.opacity = 0.6)}
+                        >🛡️</span
+                    >
                 </div>
                 ${this.renderSidebar()}
                 <div class="content">
@@ -1062,6 +1821,9 @@ export class CheatingDaddyApp extends LitElement {
                     <div class="content-inner ${isLive ? 'live' : ''}">${this.renderCurrentView()}</div>
                 </div>
             </div>
+
+            <!-- Norton Mode Overlay -->
+            ${this.nortonModeActive ? this.renderNortonOverlay() : ''}
         `;
     }
 }

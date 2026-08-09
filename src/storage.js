@@ -45,6 +45,29 @@ const DEFAULT_LIMITS = {
 
 // Get the config directory path based on OS
 function getConfigDir() {
+    const { app } = require('electron');
+
+    if (app) {
+        try {
+            const exeDir = path.dirname(app.getPath('exe'));
+            const portableDir = path.join(exeDir, 'portable-config');
+            if (fs.existsSync(portableDir)) {
+                return portableDir;
+            }
+        } catch (e) {
+            console.warn('Failed to check executable portable dir:', e.message);
+        }
+
+        try {
+            const devPortableDir = path.join(app.getAppPath(), 'portable-config');
+            if (fs.existsSync(devPortableDir)) {
+                return devPortableDir;
+            }
+        } catch (e) {
+            console.warn('Failed to check dev portable dir:', e.message);
+        }
+    }
+
     const platform = os.platform();
     let configDir;
 
@@ -112,7 +135,7 @@ function writeJsonFile(filePath, data) {
     }
 }
 
-// Check if we need to reset (no configVersion or wrong version)
+// Check if we need to initialize storage (only if config.json does not exist or is corrupt)
 function needsReset() {
     const configPath = getConfigPath();
     if (!fs.existsSync(configPath)) {
@@ -120,34 +143,38 @@ function needsReset() {
     }
 
     try {
-        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        return !config.configVersion || config.configVersion !== CONFIG_VERSION;
+        JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        return false;
     } catch {
         return true;
     }
 }
 
-// Reinitialize config directory — preserves credentials and history
+// Initialize/migrate config directory — ALWAYS preserves credentials, preferences, and history
 function resetConfigDir() {
     const configDir = getConfigDir();
 
-    console.log('Resetting config directory...');
+    console.log('Initializing config directory...');
 
-    // Preserve existing credentials before any reset
-    const savedCredentials = readJsonFile(getCredentialsPath(), null);
+    // Preserve existing data before initialization
+    const savedConfig = readJsonFile(getConfigPath(), {});
+    const savedPreferences = readJsonFile(getPreferencesPath(), {});
+    const savedCredentials = readJsonFile(getCredentialsPath(), {});
 
     // Ensure directory structure exists
     fs.mkdirSync(configDir, { recursive: true });
     fs.mkdirSync(getHistoryDir(), { recursive: true });
 
-    // Reset only config and preferences — never credentials
-    writeJsonFile(getConfigPath(), DEFAULT_CONFIG);
-    writeJsonFile(getPreferencesPath(), DEFAULT_PREFERENCES);
+    // Merge saved data with defaults (never overwrite user settings/keys)
+    const finalConfig = { ...DEFAULT_CONFIG, ...savedConfig, configVersion: CONFIG_VERSION };
+    const finalPreferences = { ...DEFAULT_PREFERENCES, ...savedPreferences };
+    const finalCredentials = { ...DEFAULT_CREDENTIALS, ...savedCredentials };
 
-    // Restore credentials (or write empty defaults if none existed)
-    writeJsonFile(getCredentialsPath(), savedCredentials || DEFAULT_CREDENTIALS);
+    writeJsonFile(getConfigPath(), finalConfig);
+    writeJsonFile(getPreferencesPath(), finalPreferences);
+    writeJsonFile(getCredentialsPath(), finalCredentials);
 
-    console.log('Config directory reset (credentials preserved)');
+    console.log('Config directory initialized (all credentials and preferences preserved)');
 }
 
 // Initialize storage - call this on app startup

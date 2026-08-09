@@ -25,6 +25,66 @@ function createMainWindow() {
     return mainWindow;
 }
 
+// Electron drops session-only cookies (no Expires header) on app restart,
+// which logs the claude.ai webview out even though the partition is "persist:".
+// Round-trip them through a file across quit/start so the login survives.
+const path = require('path');
+const fs = require('fs');
+const SYSTEM_DESIGN_COOKIES_PATH = path.join(storage.getConfigDir(), 'system-design-cookies.json');
+const CHATGPT_COOKIES_PATH = path.join(storage.getConfigDir(), 'chatgpt-cookies.json');
+
+async function restoreSystemDesignCookies() {
+    try {
+        const raw = fs.readFileSync(SYSTEM_DESIGN_COOKIES_PATH, 'utf-8');
+        const cookies = JSON.parse(raw);
+        const { session } = require('electron');
+        const ses = session.fromPartition('persist:system-design');
+        for (const cookie of cookies) {
+            const url = `http${cookie.secure ? 's' : ''}://${cookie.domain.replace(/^\./, '')}${cookie.path}`;
+            await ses.cookies.set({ ...cookie, url }).catch(() => {});
+        }
+    } catch (e) {
+        // No saved cookies yet, or partition not used before
+    }
+}
+
+async function saveSystemDesignCookies() {
+    try {
+        const { session } = require('electron');
+        const ses = session.fromPartition('persist:system-design');
+        const cookies = await ses.cookies.get({});
+        fs.writeFileSync(SYSTEM_DESIGN_COOKIES_PATH, JSON.stringify(cookies));
+    } catch (e) {
+        // Best-effort; ignore failures on quit
+    }
+}
+
+async function restoreChatGPTCookies() {
+    try {
+        const raw = fs.readFileSync(CHATGPT_COOKIES_PATH, 'utf-8');
+        const cookies = JSON.parse(raw);
+        const { session } = require('electron');
+        const ses = session.fromPartition('persist:chatgpt');
+        for (const cookie of cookies) {
+            const url = `http${cookie.secure ? 's' : ''}://${cookie.domain.replace(/^\./, '')}${cookie.path}`;
+            await ses.cookies.set({ ...cookie, url }).catch(() => {});
+        }
+    } catch (e) {
+        // No saved cookies yet, or partition not used before
+    }
+}
+
+async function saveChatGPTCookies() {
+    try {
+        const { session } = require('electron');
+        const ses = session.fromPartition('persist:chatgpt');
+        const cookies = await ses.cookies.get({});
+        fs.writeFileSync(CHATGPT_COOKIES_PATH, JSON.stringify(cookies));
+    } catch (e) {
+        // Best-effort; ignore failures on quit
+    }
+}
+
 app.whenReady().then(async () => {
     // Initialize storage (checks version, resets if needed)
     storage.initializeStorage();
@@ -34,6 +94,9 @@ app.whenReady().then(async () => {
         const { desktopCapturer } = require('electron');
         desktopCapturer.getSources({ types: ['screen'] }).catch(() => {});
     }
+
+    await restoreSystemDesignCookies();
+    await restoreChatGPTCookies();
 
     createMainWindow();
     setupGeminiIpcHandlers(geminiSessionRef);
@@ -48,8 +111,11 @@ app.on('window-all-closed', () => {
     }
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', async () => {
     stopMacOSAudioCapture();
+    if (process.platform === 'win32') require('./utils/windowsKeyboardHook').stopCapture();
+    await saveSystemDesignCookies();
+    await saveChatGPTCookies();
 });
 
 app.on('activate', () => {
@@ -286,19 +352,27 @@ function setupStorageIpcHandlers() {
     });
 
     // ============ CV MANAGEMENT ============
-    ipcMain.handle('cv:upload', async event => {
+    ipcMain.handle('cv:upload', async (event, customPath) => {
         try {
             const path = require('path');
-            const result = await dialog.showOpenDialog(mainWindow, {
-                properties: ['openFile'],
-                filters: [{ name: 'PDF Files', extensions: ['pdf'] }],
-            });
+            let filePath = customPath;
 
-            if (result.canceled || result.filePaths.length === 0) {
-                return { success: false, error: 'Upload canceled' };
+            if (!filePath) {
+                const result = await dialog.showOpenDialog(mainWindow, {
+                    properties: ['openFile'],
+                    filters: [
+                        { name: 'Supported Documents', extensions: ['pdf', 'txt', 'md'] },
+                        { name: 'PDF Files', extensions: ['pdf'] },
+                        { name: 'Text Files', extensions: ['txt', 'md'] },
+                    ],
+                });
+
+                if (result.canceled || result.filePaths.length === 0) {
+                    return { success: false, error: 'Upload canceled' };
+                }
+                filePath = result.filePaths[0];
             }
 
-            const filePath = result.filePaths[0];
             const filename = path.basename(filePath);
             const text = await extractTextFromPDF(filePath);
 
@@ -338,17 +412,75 @@ function setupStorageIpcHandlers() {
     });
 
     ipcMain.handle('start-mcq-overlay', async () => {
-        try { createMcqOverlay(); return { success: true }; }
-        catch (e) { return { success: false, error: e.message }; }
+        try {
+            createMcqOverlay();
+            return { success: true };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
     });
 
     ipcMain.handle('stop-mcq-overlay', async () => {
-        try { destroyMcqOverlay(); return { success: true }; }
-        catch (e) { return { success: false, error: e.message }; }
+        try {
+            destroyMcqOverlay();
+            return { success: true };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
     });
 }
 
 function setupGeneralIpcHandlers() {
+    ipcMain.handle('capture-screen-native', async (event, quality = 'medium') => {
+        if (process.platform === 'darwin') {
+            const { execFile } = require('child_process');
+            const fs = require('fs');
+            const path = require('path');
+            const os = require('os');
+
+            return new Promise(resolve => {
+                const tmpFile = path.join(os.tmpdir(), `norton-cap-${Date.now()}.jpg`);
+                execFile('/usr/sbin/screencapture', ['-x', '-t', 'jpg', tmpFile], err => {
+                    if (err) {
+                        console.error('screencapture CLI failed:', err);
+                        return resolve({ success: false, error: err.message });
+                    }
+                    try {
+                        if (fs.existsSync(tmpFile)) {
+                            const buffer = fs.readFileSync(tmpFile);
+                            try {
+                                fs.unlinkSync(tmpFile);
+                            } catch (e) {}
+                            return resolve({ success: true, data: buffer.toString('base64') });
+                        }
+                        return resolve({ success: false, error: 'File not created' });
+                    } catch (readErr) {
+                        return resolve({ success: false, error: readErr.message });
+                    }
+                });
+            });
+        }
+
+        const { desktopCapturer, screen } = require('electron');
+        try {
+            const primaryDisplay = screen.getPrimaryDisplay();
+            const { width, height } = primaryDisplay.size;
+            const sources = await desktopCapturer.getSources({
+                types: ['screen'],
+                thumbnailSize: { width: Math.min(width, 1920), height: Math.min(height, 1080) },
+            });
+            if (sources && sources.length > 0) {
+                const qualityValue = quality === 'low' ? 50 : quality === 'high' ? 90 : 70;
+                const base64 = sources[0].thumbnail.toJPEG(qualityValue).toString('base64');
+                return { success: true, data: base64 };
+            }
+            return { success: false, error: 'No screen sources available' };
+        } catch (error) {
+            console.error('Native screen capture error:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
     ipcMain.handle('get-app-version', async () => {
         return app.getVersion();
     });

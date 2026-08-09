@@ -338,6 +338,7 @@ export class HistoryView extends LitElement {
             presentation: 'Presentation',
             negotiation: 'Negotiation',
             exam: 'Exam Assistant',
+            dsa: 'DSA Interview',
         };
     }
 

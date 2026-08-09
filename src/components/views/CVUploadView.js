@@ -147,6 +147,21 @@ export class CVUploadView extends LitElement {
                 width: 14px;
                 height: 14px;
             }
+            .upload-zone.drag-over {
+                border-color: var(--accent);
+                background: rgba(59, 130, 246, 0.08);
+            }
+
+            .error-banner {
+                background: rgba(239, 68, 68, 0.1);
+                border: 1px solid var(--danger);
+                color: var(--danger);
+                border-radius: var(--radius-md);
+                padding: var(--space-md);
+                margin-bottom: var(--space-md);
+                font-size: var(--font-size-xs);
+                line-height: 1.4;
+            }
         `,
     ];
 
@@ -154,6 +169,8 @@ export class CVUploadView extends LitElement {
         cvFilename: { type: String },
         cvCharCount: { type: Number },
         cvTextPreview: { type: String },
+        errorMessage: { type: String },
+        isDragOver: { type: Boolean },
         onBack: { type: Function },
     };
 
@@ -162,6 +179,8 @@ export class CVUploadView extends LitElement {
         this.cvFilename = '';
         this.cvCharCount = 0;
         this.cvTextPreview = '';
+        this.errorMessage = '';
+        this.isDragOver = false;
         this.onBack = () => {};
     }
 
@@ -186,22 +205,58 @@ export class CVUploadView extends LitElement {
         }
     }
 
-    async _handleUploadClick() {
+    async _processUpload(filePath = null) {
+        this.errorMessage = '';
         try {
-            const result = await window.require('electron').ipcRenderer.invoke('cv:upload');
+            const result = await window.require('electron').ipcRenderer.invoke('cv:upload', filePath);
             if (result.success) {
                 this.cvFilename = result.filename;
                 this.cvCharCount = result.charCount;
                 const prefs = await cheatingDaddy.storage.getPreferences();
                 this.cvTextPreview = (prefs.cvText || '').substring(0, 1000) + '...';
                 this.dispatchEvent(new CustomEvent('cv-updated', { bubbles: true, composed: true }));
+            } else if (result.error && result.error !== 'Upload canceled') {
+                this.errorMessage = result.error;
             }
         } catch (error) {
-            console.error('Error selecting CV:', error);
+            console.error('Error uploading CV:', error);
+            this.errorMessage = error.message || 'Failed to parse CV file.';
+        }
+    }
+
+    async _handleUploadClick() {
+        await this._processUpload();
+    }
+
+    _handleDragOver(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.isDragOver = true;
+    }
+
+    _handleDragLeave(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.isDragOver = false;
+    }
+
+    async _handleDrop(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.isDragOver = false;
+
+        const files = e.dataTransfer?.files;
+        if (files && files.length > 0) {
+            const file = files[0];
+            const filePath = file.path;
+            if (filePath) {
+                await this._processUpload(filePath);
+            }
         }
     }
 
     async _handleClear() {
+        this.errorMessage = '';
         try {
             const result = await window.require('electron').ipcRenderer.invoke('cv:clear');
             if (result.success) {
@@ -229,33 +284,21 @@ export class CVUploadView extends LitElement {
                     <div class="page-title">CV / Resume Upload</div>
                     <div class="page-subtitle">Upload your CV to customize Norton's answers to your background and achievements automatically.</div>
 
+                    ${this.errorMessage ? html`<div class="error-banner"><strong>Upload Failed:</strong> ${this.errorMessage}</div>` : ''}
+
                     <section class="surface">
-                        ${!this.cvFilename
-                            ? html`
-                                  <div class="upload-zone" @click=${this._handleUploadClick}>
-                                      <svg
-                                          class="upload-icon"
-                                          xmlns="http://www.w3.org/2000/svg"
-                                          fill="none"
-                                          viewBox="0 0 24 24"
-                                          stroke="currentColor"
+                        ${
+                            !this.cvFilename
+                                ? html`
+                                      <div
+                                          class="upload-zone ${this.isDragOver ? 'drag-over' : ''}"
+                                          @click=${this._handleUploadClick}
+                                          @dragover=${this._handleDragOver}
+                                          @dragleave=${this._handleDragLeave}
+                                          @drop=${this._handleDrop}
                                       >
-                                          <path
-                                              stroke-linecap="round"
-                                              stroke-linejoin="round"
-                                              stroke-width="2"
-                                              d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-                                          />
-                                      </svg>
-                                      <div class="upload-title">Click to upload your CV (PDF)</div>
-                                      <div class="upload-subtitle">Only PDF formats are supported. Text will be extracted locally.</div>
-                                  </div>
-                              `
-                            : html`
-                                  <div class="status-card">
-                                      <div class="cv-info">
                                           <svg
-                                              class="doc-icon"
+                                              class="upload-icon"
                                               xmlns="http://www.w3.org/2000/svg"
                                               fill="none"
                                               viewBox="0 0 24 24"
@@ -265,26 +308,50 @@ export class CVUploadView extends LitElement {
                                                   stroke-linecap="round"
                                                   stroke-linejoin="round"
                                                   stroke-width="2"
-                                                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                                                  d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
                                               />
                                           </svg>
-                                          <div class="cv-details">
-                                              <span class="cv-name">${this.cvFilename}</span>
-                                              <span class="cv-meta">Parsed successfully: ${this.cvCharCount} characters extracted</span>
-                                          </div>
+                                          <div class="upload-title">Click or Drag & Drop to upload your CV</div>
+                                          <div class="upload-subtitle">Supported formats: PDF, TXT, MD. Text will be extracted locally.</div>
                                       </div>
-                                      <button class="btn-clear" @click=${this._handleClear}>Clear CV</button>
-                                  </div>
+                                  `
+                                : html`
+                                      <div class="status-card">
+                                          <div class="cv-info">
+                                              <svg
+                                                  class="doc-icon"
+                                                  xmlns="http://www.w3.org/2000/svg"
+                                                  fill="none"
+                                                  viewBox="0 0 24 24"
+                                                  stroke="currentColor"
+                                              >
+                                                  <path
+                                                      stroke-linecap="round"
+                                                      stroke-linejoin="round"
+                                                      stroke-width="2"
+                                                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                                                  />
+                                              </svg>
+                                              <div class="cv-details">
+                                                  <span class="cv-name">${this.cvFilename}</span>
+                                                  <span class="cv-meta">Parsed successfully: ${this.cvCharCount} characters extracted</span>
+                                              </div>
+                                          </div>
+                                          <button class="btn-clear" @click=${this._handleClear}>Clear CV</button>
+                                      </div>
 
-                                  ${this.cvTextPreview
-                                      ? html`
-                                            <div class="preview-section">
-                                                <div class="surface-title">Extracted Text Preview</div>
-                                                <div class="preview-box">${this.cvTextPreview}</div>
-                                            </div>
-                                        `
-                                      : ''}
-                              `}
+                                      ${
+                                      this.cvTextPreview
+                                          ? html`
+                                                <div class="preview-section">
+                                                    <div class="surface-title">Extracted Text Preview</div>
+                                                    <div class="preview-box">${this.cvTextPreview}</div>
+                                                </div>
+                                            `
+                                          : ''
+                                  }
+                                  `
+                        }
                     </section>
                 </div>
             </div>

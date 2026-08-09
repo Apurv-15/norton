@@ -50,11 +50,18 @@ function connectCloud(token, profile, userContext) {
             isCloudConnected = true;
             clearTimeout(timeout);
 
+            const storage = require('../storage');
+            const prefs = storage.getPreferences();
+            let finalUserContext = userContext || '';
+            if (prefs.cvText && prefs.cvText.trim()) {
+                finalUserContext = `${finalUserContext}\n\n[CV/Resume Context]:\n${prefs.cvText}`.trim();
+            }
+
             // Send config immediately after open
             const config = JSON.stringify({
                 type: 'set_config',
                 profile: profile || 'interview',
-                user_context: userContext || '',
+                user_context: finalUserContext,
             });
             cloudWs.send(config);
             console.log('[Cloud] Config sent:', profile);

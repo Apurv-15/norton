@@ -109,6 +109,17 @@ function initializeNewSession(profile = null, customPrompt = null) {
     groqConversationHistory = [];
     currentProfile = profile;
     currentCustomPrompt = customPrompt;
+
+    // Dynamically build and set currentSystemPrompt
+    const prefs = getPreferences() || {};
+    const enabledTools = prefs.enabledTools || [];
+    const googleSearchEnabled = enabledTools.some(tool => tool.googleSearch);
+    let finalCustomPrompt = customPrompt || '';
+    if (prefs.cvText && prefs.cvText.trim()) {
+        finalCustomPrompt = `${finalCustomPrompt}\n\n[CV/Resume Context]:\n${prefs.cvText}`;
+    }
+    currentSystemPrompt = getSystemPrompt(profile, finalCustomPrompt, googleSearchEnabled);
+
     console.log('New conversation session started:', currentSessionId, 'profile:', profile);
 
     // Save initial session with profile context
@@ -1063,10 +1074,7 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
     try {
         const ai = new GoogleGenAI({ apiKey: apiKey });
 
-        const contents = [
-            { inlineData: { mimeType: 'image/jpeg', data: base64Data } },
-            { text: prompt },
-        ];
+        const contents = [{ inlineData: { mimeType: 'image/jpeg', data: base64Data } }, { text: prompt }];
 
         console.log(`Sending image to ${model} (streaming)...`);
         const response = await ai.models.generateContentStream({
@@ -1145,7 +1153,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     ipcMain.handle('initialize-cloud', async (event, token, profile, userContext) => {
         try {
             currentProviderMode = 'cloud';
-            initializeNewSession(profile);
+            initializeNewSession(profile, userContext);
             setOnTurnComplete((transcription, response) => {
                 saveConversationTurn(transcription, response);
             });

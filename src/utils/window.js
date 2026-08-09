@@ -1,6 +1,7 @@
 const { BrowserWindow, globalShortcut, ipcMain, screen } = require('electron');
 const path = require('node:path');
 const storage = require('../storage');
+const { applyNonActivatingPanel } = require('./nonActivatingPanel');
 
 let mouseEventsIgnored = false;
 let mcqOverlayWindow = null;
@@ -54,10 +55,16 @@ function createWindow(sendToRenderer, geminiSessionRef) {
         transparent: true,
         hasShadow: false,
         alwaysOnTop: true,
+        // macOS: real NSPanel window - Electron's own IsPanel() check skips
+        // activateIgnoringOtherApps on show/focus, so this window can be
+        // clicked/typed into without ever pulling OS focus off whatever app
+        // (e.g. fullscreen Chrome) was frontmost underneath it.
+        ...(process.platform === 'darwin' ? { type: 'panel' } : {}),
         icon: path.join(__dirname, '../assets/logo.ico'),
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false, // TODO: change to true
+            webviewTag: true,
             backgroundThrottling: false,
             enableBlinkFeatures: 'GetDisplayMedia',
             webSecurity: true,
@@ -66,6 +73,7 @@ function createWindow(sendToRenderer, geminiSessionRef) {
         backgroundColor: '#00000000',
     });
     mainWindowRef = mainWindow;
+    applyNonActivatingPanel(mainWindow);
 
     const { session, desktopCapturer } = require('electron');
     session.defaultSession.setDisplayMediaRequestHandler(
@@ -140,6 +148,7 @@ function createWindow(sendToRenderer, geminiSessionRef) {
         if (mcqOverlayWindow && !mcqOverlayWindow.isDestroyed()) {
             mcqOverlayWindow.webContents.send('main-window-visibility', false);
         }
+        require('./windowsKeyboardHook').stopCapture();
     });
     mainWindow.on('show', () => {
         const hiddenFor = _hiddenAt ? Date.now() - _hiddenAt : 0;
@@ -173,6 +182,7 @@ function getDefaultKeybinds() {
         scrollUp: isMac ? 'Cmd+Shift+Up' : 'Ctrl+Shift+Up',
         scrollDown: isMac ? 'Cmd+Shift+Down' : 'Ctrl+Shift+Down',
         emergencyErase: isMac ? 'Cmd+Shift+E' : 'Ctrl+Shift+E',
+        toggleNortonMode: 'Alt+N',
     };
 }
 
@@ -234,6 +244,19 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
             console.log(`Registered toggleVisibility: ${keybinds.toggleVisibility}`);
         } catch (error) {
             console.error(`Failed to register toggleVisibility (${keybinds.toggleVisibility}):`, error);
+        }
+    }
+
+    // Register toggle Norton Mode shortcut
+    if (keybinds.toggleNortonMode) {
+        try {
+            globalShortcut.register(keybinds.toggleNortonMode, () => {
+                console.log('Toggle Norton Mode shortcut triggered');
+                mainWindow.webContents.send('toggle-norton-mode');
+            });
+            console.log(`Registered toggleNortonMode: ${keybinds.toggleNortonMode}`);
+        } catch (error) {
+            console.error(`Failed to register toggleNortonMode (${keybinds.toggleNortonMode}):`, error);
         }
     }
 
@@ -361,7 +384,63 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
     }
 }
 
+let chatgptWindow = null;
+
+function toggleChatGPTWindow() {
+    if (chatgptWindow && !chatgptWindow.isDestroyed()) {
+        if (chatgptWindow.isVisible()) {
+            chatgptWindow.hide();
+        } else {
+            chatgptWindow.show();
+        }
+        return { success: true };
+    }
+
+    const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+    chatgptWindow = new BrowserWindow({
+        width: 800,
+        height: 600,
+        minWidth: 400,
+        minHeight: 300,
+        resizable: true,
+        frame: true,
+        alwaysOnTop: true,
+        icon: path.join(__dirname, '../assets/logo.ico'),
+        webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            partition: 'persist:chatgpt',
+        },
+    });
+
+    chatgptWindow.loadURL('https://chatgpt.com');
+
+    chatgptWindow.on('closed', () => {
+        chatgptWindow = null;
+    });
+
+    return { success: true };
+}
+
 function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
+    ipcMain.handle('chatgpt-window:toggle', () => {
+        return toggleChatGPTWindow();
+    });
+
+    // Windows only: while a Norton text input is focused, capture keystrokes
+    // via a system-wide hook and replay them into the renderer directly, so
+    // typing into Norton never makes it the OS foreground window. See
+    // src/utils/windowsKeyboardHook.js for why this exists.
+    ipcMain.on('text-input-focus', (event, focused) => {
+        if (process.platform !== 'win32' || mainWindow.isDestroyed()) return;
+        const { startCapture, stopCapture } = require('./windowsKeyboardHook');
+        if (focused) {
+            startCapture(mainWindow.webContents);
+        } else {
+            stopCapture();
+        }
+    });
+
     ipcMain.on('view-changed', (event, view) => {
         if (!mainWindow.isDestroyed()) {
             if (view !== 'assistant') {
@@ -419,8 +498,10 @@ function createMcqOverlay() {
         hasShadow: false,
         resizable: false,
         skipTaskbar: true,
+        ...(process.platform === 'darwin' ? { type: 'panel' } : {}),
         webPreferences: { nodeIntegration: true, contextIsolation: false },
     });
+    applyNonActivatingPanel(mcqOverlayWindow);
     mcqOverlayWindow.setContentProtection(true);
     mcqOverlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     if (process.platform === 'win32') mcqOverlayWindow.setAlwaysOnTop(true, 'screen-saver', 1);

@@ -19,6 +19,22 @@ let _screenshotInFlight = false;
 
 const isLinux = process.platform === 'linux';
 const isMacOS = process.platform === 'darwin';
+const isWindows = process.platform === 'win32';
+
+// Windows only: tell the main process when a text field in our own UI is
+// focused, so it can capture keystrokes without ever making this window the
+// OS foreground window (see src/utils/windowsKeyboardHook.js for why).
+if (isWindows) {
+    const isEditable = el => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+    window.addEventListener('focusin', e => {
+        if (isEditable(e.target)) ipcRenderer.send('text-input-focus', true);
+    });
+    window.addEventListener('focusout', () => {
+        setTimeout(() => {
+            if (!isEditable(document.activeElement)) ipcRenderer.send('text-input-focus', false);
+        }, 0);
+    });
+}
 
 // ============ STORAGE API ============
 // Wrapper for IPC-based storage access
@@ -215,7 +231,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
 
     try {
         if (isMacOS) {
-            // On macOS, use SystemAudioDump for audio and getDisplayMedia for screen
+            // On macOS, use SystemAudioDump for audio and native desktopCapturer for screenshots
             if (appMode !== 'coding') {
                 console.log('Starting macOS capture with SystemAudioDump...');
                 // Start macOS audio capture
@@ -227,17 +243,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                 console.log('Starting macOS capture in Coding Mode (audio disabled)...');
             }
 
-            // Get screen capture for screenshots
-            mediaStream = await navigator.mediaDevices.getDisplayMedia({
-                video: {
-                    frameRate: 1,
-                    width: { ideal: 1920 },
-                    height: { ideal: 1080 },
-                },
-                audio: false, // Don't use browser audio on macOS
-            });
-
-            console.log('macOS screen capture started');
+            console.log('macOS stealth capture started (no screen share menu bar indicator)');
 
             if (appMode !== 'coding' && (audioMode === 'mic_only' || audioMode === 'both')) {
                 let micStream = null;
@@ -374,11 +380,15 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             }
         }
 
-        console.log('MediaStream obtained:', {
-            hasVideo: mediaStream.getVideoTracks().length > 0,
-            hasAudio: mediaStream.getAudioTracks().length > 0,
-            videoTrack: mediaStream.getVideoTracks()[0]?.getSettings(),
-        });
+        if (mediaStream) {
+            console.log('MediaStream obtained:', {
+                hasVideo: mediaStream.getVideoTracks().length > 0,
+                hasAudio: mediaStream.getAudioTracks().length > 0,
+                videoTrack: mediaStream.getVideoTracks()[0]?.getSettings(),
+            });
+        } else {
+            console.log('Stealth capture active (no web mediaStream needed)');
+        }
 
         // Manual mode only - screenshots captured on demand via shortcut
         console.log('Manual mode enabled - screenshots will be captured on demand only');
@@ -483,7 +493,28 @@ function setupWindowsLoopbackProcessing() {
 
 async function captureScreenshot(imageQuality = 'medium', isManual = false) {
     console.log(`Capturing ${isManual ? 'manual' : 'automated'} screenshot...`);
-    if (!mediaStream) return;
+
+    // Stealth Mode: On macOS or when no web mediaStream exists, use Electron desktopCapturer (no purple screen share icon)
+    if (isMacOS || !mediaStream) {
+        try {
+            const res = await ipcRenderer.invoke('capture-screen-native', imageQuality);
+            if (res.success && res.data) {
+                const result = await ipcRenderer.invoke('send-image-content', {
+                    data: res.data,
+                });
+                if (result.success) {
+                    console.log('Native stealth screenshot sent successfully');
+                } else {
+                    console.error('Failed to send stealth image:', result.error);
+                }
+            } else {
+                console.error('Failed to capture native screenshot:', res.error);
+            }
+        } catch (err) {
+            console.error('Error in native stealth screenshot:', err);
+        }
+        return;
+    }
 
     // Lazy init of video element
     if (!hiddenVideo) {
