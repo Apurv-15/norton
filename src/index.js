@@ -95,6 +95,13 @@ app.whenReady().then(async () => {
         desktopCapturer.getSources({ types: ['screen'] }).catch(() => {});
     }
 
+    const { session } = require('electron');
+    const userAgent =
+        process.platform === 'darwin'
+            ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0'
+            : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0';
+    session.fromPartition('persist:chatgpt').setUserAgent(userAgent);
+
     await restoreSystemDesignCookies();
     await restoreChatGPTCookies();
 
