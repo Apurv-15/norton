@@ -98,17 +98,14 @@ app.whenReady().then(async () => {
     const { session } = require('electron');
     const userAgent =
         process.platform === 'darwin'
-            ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0'
-            : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0';
+            ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+            : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
     const chatgptSession = session.fromPartition('persist:chatgpt');
     chatgptSession.setUserAgent(userAgent);
     chatgptSession.webRequest.onBeforeSendHeaders((details, callback) => {
         const headers = details.requestHeaders;
         delete headers['X-Requested-With'];
-        delete headers['sec-ch-ua'];
-        delete headers['sec-ch-ua-mobile'];
-        delete headers['sec-ch-ua-platform'];
         callback({ cancel: false, requestHeaders: headers });
     });
 

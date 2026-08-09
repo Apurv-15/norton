@@ -71,8 +71,8 @@ export class ChatGPTView extends LitElement {
     render() {
         const userAgent =
             process.platform === 'darwin'
-                ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0'
-                : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0';
+                ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+                : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
         return html`
             <div class="login-helper-bar">
                 <span>Having sign-in issues?</span>
