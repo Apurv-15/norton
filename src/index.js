@@ -100,7 +100,17 @@ app.whenReady().then(async () => {
         process.platform === 'darwin'
             ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0'
             : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0';
-    session.fromPartition('persist:chatgpt').setUserAgent(userAgent);
+
+    const chatgptSession = session.fromPartition('persist:chatgpt');
+    chatgptSession.setUserAgent(userAgent);
+    chatgptSession.webRequest.onBeforeSendHeaders((details, callback) => {
+        const headers = details.requestHeaders;
+        delete headers['X-Requested-With'];
+        delete headers['sec-ch-ua'];
+        delete headers['sec-ch-ua-mobile'];
+        delete headers['sec-ch-ua-platform'];
+        callback({ cancel: false, requestHeaders: headers });
+    });
 
     await restoreSystemDesignCookies();
     await restoreChatGPTCookies();
