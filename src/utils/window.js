@@ -385,6 +385,47 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
 }
 
 function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
+    let chatgptLoginWindow = null;
+    ipcMain.handle('chatgpt:open-login-window', () => {
+        if (chatgptLoginWindow && !chatgptLoginWindow.isDestroyed()) {
+            chatgptLoginWindow.focus();
+            return { success: true };
+        }
+
+        const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+        chatgptLoginWindow = new BrowserWindow({
+            width: 600,
+            height: 700,
+            minWidth: 400,
+            minHeight: 500,
+            resizable: true,
+            frame: true,
+            alwaysOnTop: true,
+            webPreferences: {
+                nodeIntegration: false,
+                contextIsolation: true,
+                partition: 'persist:chatgpt',
+            },
+        });
+
+        const userAgent =
+            process.platform === 'darwin'
+                ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0'
+                : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0';
+
+        chatgptLoginWindow.webContents.setUserAgent(userAgent);
+        chatgptLoginWindow.loadURL('https://chatgpt.com/auth/login', { userAgent });
+
+        chatgptLoginWindow.on('closed', () => {
+            chatgptLoginWindow = null;
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('chatgpt:login-complete');
+            }
+        });
+
+        return { success: true };
+    });
+
     // Windows only: while a Norton text input is focused, capture keystrokes
     // via a system-wide hook and replay them into the renderer directly, so
     // typing into Norton never makes it the OS foreground window. See
