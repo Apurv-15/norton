@@ -396,6 +396,11 @@ function toggleChatGPTWindow() {
         return { success: true };
     }
 
+    const userAgent =
+        process.platform === 'darwin'
+            ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+
     const { width, height } = screen.getPrimaryDisplay().workAreaSize;
     chatgptWindow = new BrowserWindow({
         width: 800,
@@ -413,7 +418,8 @@ function toggleChatGPTWindow() {
         },
     });
 
-    chatgptWindow.loadURL('https://chatgpt.com');
+    chatgptWindow.webContents.setUserAgent(userAgent);
+    chatgptWindow.loadURL('https://chatgpt.com', { userAgent });
 
     chatgptWindow.on('closed', () => {
         chatgptWindow = null;
