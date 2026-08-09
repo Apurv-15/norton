@@ -10,6 +10,7 @@ import { FeedbackView } from '../views/FeedbackView.js';
 import { AdvancedView } from '../views/AdvancedView.js';
 import { CVUploadView } from '../views/CVUploadView.js';
 import { SystemDesignView } from '../views/SystemDesignView.js';
+import { ChatGPTView } from '../views/ChatGPTView.js';
 
 export class CheatingDaddyApp extends LitElement {
     static styles = css`
@@ -1281,6 +1282,9 @@ export class CheatingDaddyApp extends LitElement {
             case 'system-design':
                 return html`<system-design-view></system-design-view>`;
 
+            case 'chatgpt':
+                return html`<chatgpt-view></chatgpt-view>`;
+
             case 'advanced':
                 return html`
                     <advanced-view
@@ -1406,17 +1410,13 @@ export class CheatingDaddyApp extends LitElement {
                 </svg>`,
             },
             {
-                id: 'chatgpt-window',
+                id: 'chatgpt',
                 label: 'ChatGPT',
                 icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
                     <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
                         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
                     </g>
                 </svg>`,
-                action: () => {
-                    const { ipcRenderer } = window.require('electron');
-                    ipcRenderer.invoke('chatgpt-window:toggle');
-                },
             },
             {
                 id: 'feedback',
@@ -1519,10 +1519,10 @@ export class CheatingDaddyApp extends LitElement {
                         class="live-bar-text clickable"
                         style="margin-right: 8px;"
                         @click=${() => {
-                        this.nortonModeActive = true;
-                        this.nortonShowKeyEntry = false;
-                        this.requestUpdate();
-                    }}
+                            this.nortonModeActive = true;
+                            this.nortonShowKeyEntry = false;
+                            this.requestUpdate();
+                        }}
                         title="Enter Norton Mode"
                         >🛡️</span
                     >
@@ -1601,10 +1601,10 @@ export class CheatingDaddyApp extends LitElement {
                                                   class="norton-card"
                                                   id="norton-opt-disk"
                                                   @click=${() => {
-                                              this.nortonShowKeyEntry = true;
-                                              this.requestUpdate();
-                                              cheatingDaddy.storage.updatePreference('nortonShowKeyEntry', true);
-                                          }}
+                                                      this.nortonShowKeyEntry = true;
+                                                      this.requestUpdate();
+                                                      cheatingDaddy.storage.updatePreference('nortonShowKeyEntry', true);
+                                                  }}
                                               >
                                                   <svg
                                                       class="norton-card-icon"
@@ -1625,10 +1625,10 @@ export class CheatingDaddyApp extends LitElement {
                                                   class="norton-card"
                                                   id="norton-file-clean"
                                                   @click=${() => {
-                                              this.nortonShowKeyEntry = true;
-                                              this.requestUpdate();
-                                              cheatingDaddy.storage.updatePreference('nortonShowKeyEntry', true);
-                                          }}
+                                                      this.nortonShowKeyEntry = true;
+                                                      this.requestUpdate();
+                                                      cheatingDaddy.storage.updatePreference('nortonShowKeyEntry', true);
+                                                  }}
                                               >
                                                   <svg
                                                       class="norton-card-icon"
@@ -1650,10 +1650,10 @@ export class CheatingDaddyApp extends LitElement {
                                                   class="norton-card"
                                                   id="norton-startup-mgr"
                                                   @click=${() => {
-                                              this.nortonShowKeyEntry = true;
-                                              this.requestUpdate();
-                                              cheatingDaddy.storage.updatePreference('nortonShowKeyEntry', true);
-                                          }}
+                                                      this.nortonShowKeyEntry = true;
+                                                      this.requestUpdate();
+                                                      cheatingDaddy.storage.updatePreference('nortonShowKeyEntry', true);
+                                                  }}
                                               >
                                                   <svg
                                                       class="norton-card-icon"
@@ -1673,10 +1673,10 @@ export class CheatingDaddyApp extends LitElement {
                                                   class="norton-card"
                                                   id="norton-graphs"
                                                   @click=${() => {
-                                              this.nortonShowKeyEntry = true;
-                                              this.requestUpdate();
-                                              cheatingDaddy.storage.updatePreference('nortonShowKeyEntry', true);
-                                          }}
+                                                      this.nortonShowKeyEntry = true;
+                                                      this.requestUpdate();
+                                                      cheatingDaddy.storage.updatePreference('nortonShowKeyEntry', true);
+                                                  }}
                                               >
                                                   <svg
                                                       class="norton-card-icon"
