@@ -802,6 +802,168 @@ export class CheatingDaddyApp extends LitElement {
         .norton-sub-status-val.inactive {
             color: #d11a2a !important;
         }
+
+        /* ── Menu Bar Mode styles ── */
+        .menubar-container {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            height: 100vh;
+            background: rgba(15, 15, 15, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            box-sizing: border-box;
+            padding: var(--space-md);
+            overflow: hidden;
+        }
+
+        .menubar-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            padding-bottom: var(--space-sm);
+            margin-bottom: var(--space-md);
+        }
+
+        .menubar-title {
+            font-size: var(--font-size-lg);
+            font-weight: var(--font-weight-semibold);
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: var(--space-sm);
+        }
+
+        .menubar-body {
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-sm);
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .menubar-scroll-area {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            overflow-x: hidden;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: var(--radius-md);
+            padding: var(--space-xs);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .menubar-scroll-area::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .menubar-scroll-area::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+
+        .menubar-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: var(--space-lg) var(--space-md);
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: var(--radius-lg);
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: all var(--transition);
+        }
+
+        .menubar-btn:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: var(--accent);
+            transform: translateY(-2px);
+        }
+
+        .menubar-btn-icon {
+            font-size: 32px;
+            margin-bottom: var(--space-sm);
+        }
+
+        .menubar-btn-title {
+            font-size: var(--font-size-base);
+            font-weight: var(--font-weight-semibold);
+        }
+
+        .menubar-btn-desc {
+            font-size: var(--font-size-xs);
+            color: var(--text-secondary);
+            margin-top: 4px;
+            text-align: center;
+        }
+
+        .menubar-footer {
+            display: flex;
+            justify-content: center;
+            padding-top: var(--space-md);
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            margin-top: var(--space-md);
+        }
+
+        .menubar-link {
+            font-size: var(--font-size-sm);
+            color: var(--accent);
+            cursor: pointer;
+            text-decoration: none;
+            transition: color var(--transition);
+        }
+
+        .menubar-link:hover {
+            color: var(--accent-hover);
+            text-decoration: underline;
+        }
+
+        .menubar-close-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 16px;
+            cursor: pointer;
+            padding: var(--space-xs);
+            transition: color var(--transition);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            width: 24px;
+            height: 24px;
+        }
+
+        .menubar-close-btn:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .menubar-back-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 18px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            width: 24px;
+            height: 24px;
+            transition: all var(--transition);
+            margin-right: var(--space-xs);
+        }
+
+        .menubar-back-btn:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.08);
+        }
     `;
 
     static properties = {
@@ -831,10 +993,13 @@ export class CheatingDaddyApp extends LitElement {
         appMode: { type: String },
         nortonModeActive: { type: Boolean },
         nortonShowKeyEntry: { type: Boolean },
+        isMenuBarMode: { type: Boolean },
     };
 
     constructor() {
         super();
+        const params = new URLSearchParams(window.location.search);
+        this.isMenuBarMode = params.get('mode') === 'menubar';
         this.currentView = 'main';
         this.statusText = '';
         this.startTime = null;
@@ -907,6 +1072,7 @@ export class CheatingDaddyApp extends LitElement {
             this.appMode = prefs.appMode || 'interview';
             this.nortonModeActive = prefs.nortonModeActive || false;
             this.nortonShowKeyEntry = prefs.nortonShowKeyEntry || false;
+            this._currentOpacity = typeof prefs.menuBarOpacity === 'number' ? prefs.menuBarOpacity : 1.0;
 
             this._storageLoaded = true;
             this.requestUpdate();
@@ -939,6 +1105,8 @@ export class CheatingDaddyApp extends LitElement {
                 cheatingDaddy.storage.updatePreference('nortonModeActive', this.nortonModeActive);
                 cheatingDaddy.storage.updatePreference('nortonShowKeyEntry', false);
             });
+            ipcRenderer.on('trigger-capture-session', () => this._triggerCaptureSession());
+            ipcRenderer.on('trigger-hidden-screenshot', () => this._triggerHiddenScreenshot());
         }
     }
 
@@ -954,6 +1122,115 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.removeAllListeners('reconnect-failed');
             ipcRenderer.removeAllListeners('whisper-downloading');
             ipcRenderer.removeAllListeners('toggle-norton-mode');
+            ipcRenderer.removeAllListeners('trigger-capture-session');
+            ipcRenderer.removeAllListeners('trigger-hidden-screenshot');
+        }
+    }
+
+    async _processScreenshot(base64Data) {
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+
+            // Automatically switch to assistant view so AI response streams directly here in menu bar
+            if (this.currentView !== 'assistant') {
+                this.currentView = 'assistant';
+                this.requestUpdate();
+            }
+
+            const prompt =
+                window.cheatingDaddy && window.cheatingDaddy.getManualScreenshotPrompt
+                    ? window.cheatingDaddy.getManualScreenshotPrompt()
+                    : window.currentAppMode === 'mcq'
+                      ? `This is an MCQ exam question. Extract the question and all answer options exactly as written. Identify the correct answer. Reply with ONLY: [LETTER]) one-line reason. Nothing else.`
+                      : `Help me on this page, give me the answer no bs, complete answer.`;
+
+            if (window.cheatingDaddy && window.cheatingDaddy.setStatus) {
+                window.cheatingDaddy.setStatus('Analyzing Screen...');
+            }
+
+            const result = await ipcRenderer.invoke('send-image-content', {
+                data: base64Data,
+                prompt: prompt,
+            });
+
+            if (result.success) {
+                console.log('Screenshot sent to AI session successfully');
+                return;
+            }
+
+            console.warn('Failed to send image directly, falling back to OCR:', result.error);
+            const ocrRes = await ipcRenderer.invoke('ocr-base64', base64Data);
+            if (ocrRes.success && ocrRes.text) {
+                const finalPrompt = `${prompt}\n\n[Extracted Screen Text Context]:\n${ocrRes.text}`;
+                if (window.cheatingDaddy && window.cheatingDaddy.sendTextMessage) {
+                    await window.cheatingDaddy.sendTextMessage(finalPrompt);
+                }
+            } else {
+                console.error('OCR processing failed or returned empty text:', ocrRes.error);
+                if (window.cheatingDaddy && window.cheatingDaddy.setStatus) {
+                    window.cheatingDaddy.setStatus('Analysis Failed');
+                }
+            }
+        }
+    }
+
+    async _triggerCaptureSession() {
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            const captureRes = await ipcRenderer.invoke('capture-screen-native');
+            if (captureRes.success && captureRes.data) {
+                await this._processScreenshot(captureRes.data);
+            } else {
+                console.error('Failed to capture session screenshot:', captureRes.error);
+            }
+        }
+    }
+
+    async _triggerHiddenScreenshot() {
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            const captureRes = await ipcRenderer.invoke('capture-clean-screenshot');
+            if (captureRes.success && captureRes.data) {
+                await this._processScreenshot(captureRes.data);
+            } else {
+                console.error('Failed to capture clean screenshot:', captureRes.error);
+            }
+        }
+    }
+
+    async _switchToFullMode() {
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            await ipcRenderer.invoke('toggle-app-mode', 'full');
+        }
+    }
+
+    async _hideMenuBarWindow() {
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            await ipcRenderer.invoke('hide-menubar-window');
+        }
+    }
+
+    async _setMenuBarOpacity(val) {
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            const res = await ipcRenderer.invoke('set-menubar-opacity', val);
+            if (res.success) {
+                this._currentOpacity = res.opacity;
+                this.requestUpdate();
+            }
+        }
+    }
+
+    async _adjustMenuBarSize(dw, dh) {
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            const prefs = await cheatingDaddy.storage.getPreferences();
+            const bounds = prefs.menuBarBounds || { width: 440, height: 550 };
+            const newW = Math.max(320, Math.min(900, (bounds.width || 440) + dw));
+            const newH = Math.max(250, Math.min(1000, (bounds.height || 550) + dh));
+            await ipcRenderer.invoke('set-menubar-size', { width: newW, height: newH });
         }
     }
 
@@ -1110,9 +1387,9 @@ export class CheatingDaddyApp extends LitElement {
         this.currentView = 'assistant';
         this._startTimer();
 
-        // MCQ overlay
+        // MCQ overlay (only in full mode, not in menubar mode)
         window.currentAppMode = this.selectedProfile;
-        if (window.require) {
+        if (window.require && !this.isMenuBarMode) {
             const { ipcRenderer } = window.require('electron');
             if (this.selectedProfile === 'mcq') {
                 ipcRenderer.invoke('start-mcq-overlay');
@@ -1437,6 +1714,22 @@ export class CheatingDaddyApp extends LitElement {
                         <path d="M12 13a2 2 0 0 0 .914-3.782a1.98 1.98 0 0 0-2.414.483" />
                     </g>
                 </svg>`,
+            },
+            {
+                id: 'menubar-mode',
+                label: 'Menu Bar Mode',
+                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+                        <rect x="3" y="5" width="18" height="14" rx="2" />
+                        <path d="M3 10h18M12 5v5" />
+                    </g>
+                </svg>`,
+                action: async () => {
+                    if (window.require) {
+                        const { ipcRenderer } = window.require('electron');
+                        await ipcRenderer.invoke('toggle-app-mode', 'menubar');
+                    }
+                },
             },
         ];
 
@@ -1789,6 +2082,73 @@ export class CheatingDaddyApp extends LitElement {
     }
 
     render() {
+        if (this.isMenuBarMode) {
+            const currentOp = this._currentOpacity || 1.0;
+            return html`
+                <div class="menubar-container">
+                    <div class="menubar-header">
+                        <div class="menubar-title" style="display:flex;align-items:center;">
+                            ${
+                                this.currentView !== 'main'
+                                    ? html` <button class="menubar-back-btn" @click=${() => this.navigate('main')} title="Go Back">←</button> `
+                                    : ''
+                            }
+                            <span style="margin-right: var(--space-xs);">🛡️</span>
+                            <span>Norton Helper</span>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <span title="Opacity" style="font-size:11px;opacity:0.7;">💧</span>
+                            <input
+                                type="range"
+                                min="0.2"
+                                max="1.0"
+                                step="0.05"
+                                .value=${currentOp}
+                                @input=${e => this._setMenuBarOpacity(parseFloat(e.target.value))}
+                                style="width:50px;height:4px;cursor:pointer;accent-color:var(--accent);"
+                                title="Adjust Window Opacity / Transparency"
+                            />
+                            <button class="menubar-close-btn" @click=${() => this._hideMenuBarWindow()} title="Hide helper window">✕</button>
+                        </div>
+                    </div>
+                    <div class="menubar-body" style="display:flex;flex-direction:column;gap:var(--space-sm);">
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:var(--space-xs);">
+                            <button
+                                class="menubar-btn"
+                                style="flex:1;padding: var(--space-xs) var(--space-sm);"
+                                @click=${() => this._triggerHiddenScreenshot()}
+                            >
+                                <div class="menubar-btn-title" style="font-size:12px;text-align:center;">🕵️ Stealth Screenshot</div>
+                            </button>
+                            <div style="display:flex;gap:3px;align-items:center;">
+                                <button class="mode-toggle-btn" @click=${() => this._adjustMenuBarSize(0, 60)} title="Increase Height (Alt+Up)">
+                                    ↕+
+                                </button>
+                                <button class="mode-toggle-btn" @click=${() => this._adjustMenuBarSize(0, -60)} title="Decrease Height (Alt+Down)">
+                                    ↕-
+                                </button>
+                                <button class="mode-toggle-btn" @click=${() => this._adjustMenuBarSize(60, 0)} title="Increase Width (Alt+Right)">
+                                    ↔+
+                                </button>
+                                <button class="mode-toggle-btn" @click=${() => this._adjustMenuBarSize(-60, 0)} title="Decrease Width (Alt+Left)">
+                                    ↔-
+                                </button>
+                            </div>
+                        </div>
+                        <div class="menubar-scroll-area">${this.renderCurrentView()}</div>
+                    </div>
+                    <div class="menubar-footer" style="display:flex;align-items:center;justify-content:space-between;">
+                        <a class="menubar-link" @click=${() => this._switchToFullMode()}>Show Full App Window</a>
+                        <div style="display:flex;gap:6px;font-size:10px;color:var(--text-muted);">
+                            <span @click=${() => this._setMenuBarOpacity(0.3)} style="cursor:pointer;opacity:0.7;">30%</span>
+                            <span @click=${() => this._setMenuBarOpacity(0.6)} style="cursor:pointer;opacity:0.7;">60%</span>
+                            <span @click=${() => this._setMenuBarOpacity(1.0)} style="cursor:pointer;opacity:0.7;">100%</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
         // Onboarding is fullscreen, no sidebar
         if (this.currentView === 'onboarding') {
             return html` <div class="fullscreen">${this.renderCurrentView()}</div> `;
