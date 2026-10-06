@@ -8,8 +8,15 @@ const {
     getAvailableModel,
     incrementLimitCount,
     getApiKey,
+    getGeminiApiKeys,
+    getLockedKeys,
+    lockKey,
+    unlockKey,
+    resetKeyLocks,
+    getNextAvailableGeminiKey,
     getGroqApiKey,
     getDeepgramApiKey,
+    getOpenrouterApiKey,
     incrementCharUsage,
     getModelForToday,
     getPreferences,
@@ -72,8 +79,10 @@ const RECONNECT_DELAY = 2000;
 
 function sendToRenderer(channel, data) {
     const windows = BrowserWindow.getAllWindows();
-    if (windows.length > 0) {
-        windows[0].webContents.send(channel, data);
+    for (const win of windows) {
+        if (win && !win.isDestroyed()) {
+            win.webContents.send(channel, data);
+        }
     }
     // ponytail: also push to MCQ overlay when active
     if (currentProfile === 'mcq') {
@@ -84,6 +93,24 @@ function sendToRenderer(channel, data) {
             if (channel === 'new-response' || channel === 'update-response') {
                 overlay.webContents.send('mcq-answer', data);
             }
+        }
+    }
+    if (channel === 'update-status') {
+        try {
+            const indexModule = require('../index');
+            if (indexModule.updateTrayStatus) {
+                indexModule.updateTrayStatus(data);
+            }
+        } catch (e) {}
+    }
+    if (channel === 'new-response' || channel === 'update-response') {
+        try {
+            const indexModule = require('../index');
+            if (indexModule.updateTrayResponsePreview) {
+                indexModule.updateTrayResponsePreview(typeof data === 'string' ? data : JSON.stringify(data));
+            }
+        } catch (e) {
+            // Ignore potential circular require warnings during boot
         }
     }
 }
@@ -378,10 +405,40 @@ async function sendToGroq(transcription) {
     }
 }
 
+function isQuotaOrRateLimitError(error) {
+    if (!error) return false;
+    const msg = String(error.message || '') + ' ' + String(error.status || '') + ' ' + String(error.code || '');
+    return (
+        error.status === 429 ||
+        msg.includes('429') ||
+        msg.includes('RESOURCE_EXHAUSTED') ||
+        msg.includes('quota') ||
+        msg.includes('Quota') ||
+        msg.includes('RATE_LIMIT') ||
+        msg.includes('rate limit') ||
+        msg.includes('Rate limit') ||
+        msg.includes('API_KEY_INVALID')
+    );
+}
+
 async function sendToGemma(transcription) {
-    const apiKey = getApiKey();
-    if (!apiKey) {
-        console.log('No Gemini API key configured');
+    const allKeys = getGeminiApiKeys();
+    const lockedKeys = getLockedKeys();
+
+    const availableKeyEntries = allKeys
+        .map((k, idx) => ({ key: (k || '').trim(), index: idx }))
+        .filter(entry => entry.key && (!lockedKeys[entry.key] || !lockedKeys[entry.key].locked));
+
+    if (availableKeyEntries.length === 0) {
+        const fallbackKey = getApiKey();
+        if (fallbackKey && (!lockedKeys[fallbackKey] || !lockedKeys[fallbackKey].locked)) {
+            availableKeyEntries.push({ key: fallbackKey, index: 0 });
+        }
+    }
+
+    if (availableKeyEntries.length === 0) {
+        console.log('No unlocked Gemini API key configured for Gemma');
+        sendToRenderer('update-status', 'All Gemini keys are locked or empty');
         return;
     }
 
@@ -398,62 +455,76 @@ async function sendToGemma(transcription) {
     });
 
     const trimmedHistory = trimConversationHistoryForGemma(groqConversationHistory, 42000);
+    const messages = trimmedHistory.map(msg => ({
+        role: msg.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: msg.content }],
+    }));
+    const systemPrompt = currentSystemPrompt || 'You are a helpful assistant.';
 
-    try {
-        const ai = new GoogleGenAI({ apiKey: apiKey });
+    for (let i = 0; i < availableKeyEntries.length; i++) {
+        const { key, index } = availableKeyEntries[i];
+        try {
+            const ai = new GoogleGenAI({ apiKey: key });
 
-        const messages = trimmedHistory.map(msg => ({
-            role: msg.role === 'assistant' ? 'model' : 'user',
-            parts: [{ text: msg.content }],
-        }));
-
-        const systemPrompt = currentSystemPrompt || 'You are a helpful assistant.';
-
-        const response = await ai.models.generateContentStream({
-            model: 'gemini-2.5-flash-lite',
-            contents: messages,
-            config: {
-                systemInstruction: systemPrompt,
-            },
-        });
-
-        let fullText = '';
-        let isFirst = true;
-
-        for await (const chunk of response) {
-            const chunkText = chunk.text;
-            if (chunkText) {
-                fullText += chunkText;
-                sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
-                isFirst = false;
-            }
-        }
-
-        const systemPromptChars = (currentSystemPrompt || 'You are a helpful assistant.').length;
-        const historyChars = trimmedHistory.reduce((sum, msg) => sum + (msg.content || '').length, 0);
-        const inputChars = systemPromptChars + historyChars;
-        const outputChars = fullText.length;
-
-        incrementCharUsage('gemini', 'gemini-2.5-flash-lite', inputChars + outputChars);
-
-        if (fullText.trim()) {
-            groqConversationHistory.push({
-                role: 'assistant',
-                content: fullText.trim(),
+            const response = await ai.models.generateContentStream({
+                model: 'gemini-2.5-flash-lite',
+                contents: messages,
+                config: {
+                    systemInstruction: systemPrompt,
+                },
             });
 
-            if (groqConversationHistory.length > 40) {
-                groqConversationHistory = groqConversationHistory.slice(-40);
+            let fullText = '';
+            let isFirst = true;
+
+            for await (const chunk of response) {
+                const chunkText = chunk.text;
+                if (chunkText) {
+                    fullText += chunkText;
+                    sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
+                    isFirst = false;
+                }
             }
 
-            saveConversationTurn(transcription, fullText);
-        }
+            const systemPromptChars = systemPrompt.length;
+            const historyChars = trimmedHistory.reduce((sum, msg) => sum + (msg.content || '').length, 0);
+            const inputChars = systemPromptChars + historyChars;
+            const outputChars = fullText.length;
 
-        console.log('Gemini response completed');
-        sendToRenderer('update-status', 'Listening...');
-    } catch (error) {
-        console.error('Error calling Gemini API:', error);
-        sendToRenderer('update-status', 'Gemini error: ' + error.message);
+            incrementCharUsage('gemini', 'gemini-2.5-flash-lite', inputChars + outputChars);
+
+            if (fullText.trim()) {
+                groqConversationHistory.push({
+                    role: 'assistant',
+                    content: fullText.trim(),
+                });
+
+                if (groqConversationHistory.length > 40) {
+                    groqConversationHistory = groqConversationHistory.slice(-40);
+                }
+
+                saveConversationTurn(transcription, fullText);
+            }
+
+            console.log(`Gemini response completed using Key #${index + 1}`);
+            sendToRenderer('update-status', 'Listening...');
+            return;
+        } catch (error) {
+            console.error(`Error calling Gemini API with Key #${index + 1}:`, error.message);
+            if (isQuotaOrRateLimitError(error)) {
+                console.warn(`[Multi-Key Rotator] Locking Key #${index + 1} due to rate-limit/quota error.`);
+                lockKey(key, `Quota/Rate limit hit: ${error.message || '429'}`);
+                sendToRenderer('key-locked', { index, key: key.substring(0, 8) + '...', reason: error.message });
+                if (i < availableKeyEntries.length - 1) {
+                    const nextEntry = availableKeyEntries[i + 1];
+                    sendToRenderer('update-status', `Key #${index + 1} rate-limited. Switched to Key #${nextEntry.index + 1}...`);
+                    continue;
+                }
+            } else if (i < availableKeyEntries.length - 1) {
+                continue;
+            }
+            sendToRenderer('update-status', 'Gemini error: ' + error.message);
+        }
     }
 }
 
@@ -1061,53 +1132,227 @@ async function sendImageToGroq(base64Data, prompt) {
     }
 }
 
-async function sendImageToGeminiHttp(base64Data, prompt) {
-    const apiKey = getApiKey();
+async function fetchOpenRouterFreeModels() {
+    try {
+        const res = await fetch('https://openrouter.ai/api/v1/models');
+        if (res.ok) {
+            const data = await res.json();
+            if (data && Array.isArray(data.data)) {
+                const freeModels = data.data
+                    .filter(m => m.id && (m.id.endsWith(':free') || (m.pricing && parseFloat(m.pricing.prompt) === 0)))
+                    .map(m => m.id);
+                if (freeModels.length > 0) return freeModels;
+            }
+        }
+    } catch (e) {
+        console.warn('Could not fetch OpenRouter models API:', e.message);
+    }
+    return [
+        'meta-llama/llama-3.3-70b-instruct:free',
+        'google/gemini-2.0-flash-exp:free',
+        'deepseek/deepseek-r1:free',
+        'qwen/qwen-2.5-coder-32b-instruct:free',
+        'meta-llama/llama-3.1-8b-instruct:free',
+    ];
+}
 
-    // No Gemini key → go straight to Groq vision
-    if (!apiKey) {
+async function sendToOpenRouterHttp(prompt, base64Data = null) {
+    const openrouterKey = getOpenrouterApiKey();
+    const prefs = getPreferences();
+    const configuredModel = prefs.openrouterModel || 'meta-llama/llama-3.3-70b-instruct';
+    const textPrompt = prompt || 'Analyze this content and provide a direct answer.';
+
+    // Model rotation list: configured model -> free models -> standard models
+    const fallbackFreeModels = [
+        configuredModel,
+        'meta-llama/llama-3.3-70b-instruct:free',
+        'google/gemini-2.0-flash-exp:free',
+        'deepseek/deepseek-r1:free',
+        'qwen/qwen-2.5-coder-32b-instruct:free',
+        'meta-llama/llama-3.1-8b-instruct:free',
+        'meta-llama/llama-3.3-70b-instruct',
+    ];
+
+    // Deduplicate candidate models
+    const candidateModels = Array.from(new Set(fallbackFreeModels));
+
+    for (let i = 0; i < candidateModels.length; i++) {
+        const modelToUse = candidateModels[i];
+        console.log(`[OpenRouter Auto-Fallback] Attempt ${i + 1}/${candidateModels.length}: ${modelToUse}...`);
+        sendToRenderer('update-status', `OpenRouter (${modelToUse.split('/')[1] || modelToUse})...`);
+
+        try {
+            const messages = [{ role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' }];
+
+            if (base64Data) {
+                messages.push({
+                    role: 'user',
+                    content: [
+                        { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64Data}` } },
+                        { type: 'text', text: textPrompt },
+                    ],
+                });
+            } else {
+                messages.push({ role: 'user', content: textPrompt });
+            }
+
+            const headers = {
+                'HTTP-Referer': 'https://github.com/sohzm/cheating-daddy',
+                'X-Title': 'Norton Assistant',
+                'Content-Type': 'application/json',
+            };
+            if (openrouterKey) {
+                headers['Authorization'] = `Bearer ${openrouterKey}`;
+            }
+
+            const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify({
+                    model: modelToUse,
+                    messages: messages,
+                    stream: true,
+                    temperature: 0.2,
+                    max_tokens: 1500,
+                }),
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.warn(`OpenRouter model ${modelToUse} failed (${response.status}):`, errorText);
+                if (i < candidateModels.length - 1) {
+                    sendToRenderer('update-status', `OpenRouter model ${modelToUse.split('/')[1] || modelToUse} rate-limited. Trying free model...`);
+                    continue;
+                }
+                return { success: false, error: `OpenRouter error (${response.status}): ${errorText}` };
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let fullText = '';
+            let isFirst = true;
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                for (const line of decoder.decode(value, { stream: true }).split('\n')) {
+                    if (!line.startsWith('data: ')) continue;
+                    const data = line.slice(6);
+                    if (data === '[DONE]') continue;
+                    try {
+                        const token = JSON.parse(data).choices?.[0]?.delta?.content || '';
+                        if (token) {
+                            fullText += token;
+                            sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
+                            isFirst = false;
+                        }
+                    } catch {}
+                }
+            }
+
+            if (fullText.trim().length > 0) {
+                console.log(`OpenRouter response completed via ${modelToUse}`);
+                saveScreenAnalysis(textPrompt, fullText, modelToUse);
+                return { success: true, text: fullText, model: modelToUse };
+            }
+        } catch (error) {
+            console.error(`Error with OpenRouter model ${modelToUse}:`, error.message);
+            if (i < candidateModels.length - 1) continue;
+        }
+    }
+
+    return { success: false, error: 'All OpenRouter models (including free models) failed or rate limited' };
+}
+
+async function sendImageToGeminiHttp(base64Data, prompt) {
+    const allKeys = getGeminiApiKeys();
+    const lockedKeys = getLockedKeys();
+
+    const availableKeyEntries = allKeys
+        .map((k, idx) => ({ key: (k || '').trim(), index: idx }))
+        .filter(entry => entry.key && (!lockedKeys[entry.key] || !lockedKeys[entry.key].locked));
+
+    if (availableKeyEntries.length === 0) {
+        const fallbackKey = getApiKey();
+        if (fallbackKey && (!lockedKeys[fallbackKey] || !lockedKeys[fallbackKey].locked)) {
+            availableKeyEntries.push({ key: fallbackKey, index: 0 });
+        }
+    }
+
+    if (availableKeyEntries.length === 0) {
+        console.log('No unlocked Gemini API key available, trying OpenRouter fallback...');
+        const openrouterKey = getOpenrouterApiKey();
+        if (openrouterKey) {
+            return sendToOpenRouterHttp(prompt, base64Data);
+        }
+        console.log('No OpenRouter key configured, falling back to Groq');
         return sendImageToGroq(base64Data, prompt);
     }
 
     const model = getAvailableModel();
 
-    try {
-        const ai = new GoogleGenAI({ apiKey: apiKey });
+    for (let i = 0; i < availableKeyEntries.length; i++) {
+        const { key, index } = availableKeyEntries[i];
+        try {
+            console.log(`Sending image to ${model} using Key #${index + 1} (streaming)...`);
+            const ai = new GoogleGenAI({ apiKey: key });
 
-        const contents = [{ inlineData: { mimeType: 'image/jpeg', data: base64Data } }, { text: prompt }];
+            const contents = base64Data ? [{ inlineData: { mimeType: 'image/jpeg', data: base64Data } }, { text: prompt }] : [{ text: prompt }];
 
-        console.log(`Sending image to ${model} (streaming)...`);
-        const response = await ai.models.generateContentStream({
-            model: model,
-            contents: contents,
-            config: {
-                systemInstruction: currentSystemPrompt || 'You are a helpful assistant.',
-                temperature: 0.2,
-            },
-        });
+            const response = await ai.models.generateContentStream({
+                model: model,
+                contents: contents,
+                config: {
+                    systemInstruction: currentSystemPrompt || 'You are a helpful assistant.',
+                    temperature: 0.2,
+                },
+            });
 
-        incrementLimitCount(model);
+            incrementLimitCount(model);
 
-        let fullText = '';
-        let isFirst = true;
-        for await (const chunk of response) {
-            const chunkText = chunk.text;
-            if (chunkText) {
-                fullText += chunkText;
-                sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
-                isFirst = false;
+            let fullText = '';
+            let isFirst = true;
+            for await (const chunk of response) {
+                const chunkText = chunk.text;
+                if (chunkText) {
+                    fullText += chunkText;
+                    sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
+                    isFirst = false;
+                }
+            }
+
+            console.log(`Image response completed from ${model} using Key #${index + 1}`);
+            saveScreenAnalysis(prompt, fullText, model);
+            return { success: true, text: fullText, model: model, keyIndex: index };
+        } catch (error) {
+            console.error(`Error sending image with Gemini Key #${index + 1}:`, error.message);
+            if (isQuotaOrRateLimitError(error)) {
+                console.warn(`[Multi-Key Rotator] Locking Key #${index + 1} due to quota/rate limit error.`);
+                lockKey(key, `Quota/Rate limit hit: ${error.message || '429'}`);
+                sendToRenderer('key-locked', { index, key: key.substring(0, 8) + '...', reason: error.message });
+                if (i < availableKeyEntries.length - 1) {
+                    const nextEntry = availableKeyEntries[i + 1];
+                    sendToRenderer('update-status', `Key #${index + 1} rate-limited. Auto-switching to Key #${nextEntry.index + 1}...`);
+                    continue; // Try next key
+                }
+            } else if (i < availableKeyEntries.length - 1) {
+                continue;
             }
         }
-
-        console.log(`Image response completed from ${model}`);
-        saveScreenAnalysis(prompt, fullText, model);
-        return { success: true, text: fullText, model: model };
-    } catch (error) {
-        console.error('Error sending image to Gemini HTTP:', error);
-        // Fallback to Groq vision on Gemini failure
-        console.log('Falling back to Groq vision...');
-        return sendImageToGroq(base64Data, prompt);
     }
+
+    // Fallback order: OpenRouter -> Groq
+    const openrouterKey = getOpenrouterApiKey();
+    if (openrouterKey) {
+        console.log('All Gemini keys failed or locked. Falling back to OpenRouter...');
+        sendToRenderer('update-status', 'Gemini keys limit hit. Switching to OpenRouter...');
+        const orResult = await sendToOpenRouterHttp(prompt, base64Data);
+        if (orResult.success) return orResult;
+    }
+
+    console.log('Falling back to Groq vision...');
+    sendToRenderer('update-status', 'Switching to Groq vision...');
+    return sendImageToGroq(base64Data, prompt);
 }
 
 function setupGeminiIpcHandlers(geminiSessionRef) {
@@ -1323,18 +1568,40 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
                 return result;
             }
 
-            // Deepgram mode: run Gemini vision API (with the real screenshot) to analyze the image
-            if (isDeepgramMode()) {
-                const textPrompt = prompt || 'Describe what you see in this screenshot and answer any question shown.';
-                console.log('[Deepgram mode] Image received – running Gemini vision.');
+            const prefs = getPreferences();
+            const textPrompt = prompt || 'Help me on this page, give me the answer no bs, complete answer.';
 
-                // Exclusively run Gemini HTTP vision for image-based requests to avoid concurrent streaming conflicts
-                const result = await sendImageToGeminiHttp(data, textPrompt);
-                return result;
+            // OCR-First Token Saver: If text is cleanly recognized on screen (e.g. DSA question, MCQ, exam problem),
+            // send text prompt instead of full image to save 85%+ token quota and avoid rate limits!
+            if (prefs.ocrFirstEnabled !== false) {
+                try {
+                    const { performOcrOnBase64 } = require('./silentOcr');
+                    sendToRenderer('update-status', 'Transcribing screen (OCR token saver)...');
+                    const ocrText = await performOcrOnBase64(data);
+                    if (ocrText && ocrText.trim().length >= 25) {
+                        console.log(
+                            `[Token Saver] Native OCR extracted ${ocrText.trim().length} chars. Converting screenshot to compact text prompt (~150 tokens vs ~2000 image tokens).`
+                        );
+                        const fullTextQuery = `${textPrompt}\n\n[Extracted Screen Text Context]:\n${ocrText.trim()}`;
+
+                        // Send text via current active provider / failover chain
+                        if (currentProviderMode === 'local') {
+                            return await getLocalAi().sendLocalText(fullTextQuery);
+                        }
+
+                        // Try Gemini -> OpenRouter -> Groq
+                        sendToRenderer('update-status', 'Thinking...');
+                        const geminiResult = await sendImageToGeminiHttp(null, fullTextQuery);
+                        return geminiResult;
+                    }
+                    console.log('[Token Saver] Screen text sparse (<25 chars), sending image directly.');
+                } catch (ocrErr) {
+                    console.warn('[Token Saver] Native OCR skipped:', ocrErr.message);
+                }
             }
 
-            // Use Gemini HTTP API instead of realtime session
-            const result = await sendImageToGeminiHttp(data, prompt);
+            // Deepgram / Default mode: send image via provider hierarchy
+            const result = await sendImageToGeminiHttp(data, textPrompt);
             return result;
         } catch (error) {
             console.error('Error sending image:', error);
