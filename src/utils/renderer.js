@@ -66,6 +66,23 @@ const storage = {
     async setApiKey(apiKey) {
         return ipcRenderer.invoke('storage:set-api-key', apiKey);
     },
+    async getGeminiApiKeys() {
+        const result = await ipcRenderer.invoke('storage:get-gemini-api-keys');
+        return result.success ? result.data : ['', '', '', '', ''];
+    },
+    async setGeminiApiKeys(keys) {
+        return ipcRenderer.invoke('storage:set-gemini-api-keys', keys);
+    },
+    async getLockedKeys() {
+        const result = await ipcRenderer.invoke('storage:get-locked-keys');
+        return result.success ? result.data : {};
+    },
+    async unlockKey(key) {
+        return ipcRenderer.invoke('storage:unlock-key', key);
+    },
+    async resetKeyLocks() {
+        return ipcRenderer.invoke('storage:reset-key-locks');
+    },
     async getGroqApiKey() {
         const result = await ipcRenderer.invoke('storage:get-groq-api-key');
         return result.success ? result.data : '';
@@ -79,6 +96,13 @@ const storage = {
     },
     async setDeepgramApiKey(deepgramApiKey) {
         return ipcRenderer.invoke('storage:set-deepgram-api-key', deepgramApiKey);
+    },
+    async getOpenrouterApiKey() {
+        const result = await ipcRenderer.invoke('storage:get-openrouter-api-key');
+        return result.success ? result.data : '';
+    },
+    async setOpenrouterApiKey(openrouterApiKey) {
+        return ipcRenderer.invoke('storage:set-openrouter-api-key', openrouterApiKey);
     },
 
     // Preferences
@@ -635,101 +659,128 @@ async function captureManualScreenshot(imageQuality = null) {
         return;
     }
 
-    // Lazy init of video element
-    if (!hiddenVideo) {
-        hiddenVideo = document.createElement('video');
-        hiddenVideo.srcObject = mediaStream;
-        hiddenVideo.muted = true;
-        hiddenVideo.playsInline = true;
-        await hiddenVideo.play();
+    try {
+        console.log('Triggering silent screen OCR...');
+        cheatingDaddy.setStatus('Analyzing Screen...');
 
-        await new Promise(resolve => {
-            if (hiddenVideo.readyState >= 2) return resolve();
-            hiddenVideo.onloadedmetadata = () => resolve();
-        });
+        const ocrResult = await ipcRenderer.invoke('capture-screen-ocr');
+        if (ocrResult.success && ocrResult.text) {
+            console.log('OCR text extracted successfully:', ocrResult.text.length, 'characters');
 
-        // Lazy init of canvas based on video dimensions
-        offscreenCanvas = document.createElement('canvas');
-        offscreenCanvas.width = hiddenVideo.videoWidth;
-        offscreenCanvas.height = hiddenVideo.videoHeight;
-        offscreenContext = offscreenCanvas.getContext('2d');
-    }
+            // Format prompt with OCR text context
+            const fullPrompt = `${getManualScreenshotPrompt()}\n\n[Extracted Screen Text Context]:\n${ocrResult.text}`;
 
-    // Check if video is ready
-    if (hiddenVideo.readyState < 2) {
-        console.warn('Video not ready yet, skipping screenshot');
-        return;
-    }
+            const textResult = await sendTextMessage(fullPrompt);
+            _screenshotInFlight = false;
 
-    // Downscale to max 1280px wide for faster transfer — vision models don't need 4K
-    const MAX_WIDTH = 1280;
-    const srcW = hiddenVideo.videoWidth;
-    const srcH = hiddenVideo.videoHeight;
-    let destW = srcW;
-    let destH = srcH;
-    if (srcW > MAX_WIDTH) {
-        destW = MAX_WIDTH;
-        destH = Math.round(srcH * (MAX_WIDTH / srcW));
-    }
-    offscreenCanvas.width = destW;
-    offscreenCanvas.height = destH;
-    offscreenContext.drawImage(hiddenVideo, 0, 0, destW, destH);
+            if (textResult.success) {
+                console.log('OCR text analysis prompt submitted successfully.');
+            } else {
+                console.error('Failed to submit OCR prompt:', textResult.error);
+                cheatingDaddy.addNewResponse(`Error submitting text prompt: ${textResult.error}`);
+            }
+        } else {
+            console.warn('OCR returned empty text, falling back to legacy screen share capture...', ocrResult.error || '');
 
-    let qualityValue;
-    switch (quality) {
-        case 'high':
-            qualityValue = 0.85;
-            break;
-        case 'medium':
-            qualityValue = 0.6;
-            break;
-        case 'low':
-            qualityValue = 0.4;
-            break;
-        default:
-            qualityValue = 0.6;
-    }
+            // Lazy init of video element
+            if (!hiddenVideo) {
+                hiddenVideo = document.createElement('video');
+                hiddenVideo.srcObject = mediaStream;
+                hiddenVideo.muted = true;
+                hiddenVideo.playsInline = true;
+                await hiddenVideo.play();
 
-    offscreenCanvas.toBlob(
-        async blob => {
-            if (!blob) {
-                console.error('Failed to create blob from canvas');
+                await new Promise(resolve => {
+                    if (hiddenVideo.readyState >= 2) return resolve();
+                    hiddenVideo.onloadedmetadata = () => resolve();
+                });
+
+                // Lazy init of canvas based on video dimensions
+                offscreenCanvas = document.createElement('canvas');
+                offscreenCanvas.width = hiddenVideo.videoWidth;
+                offscreenCanvas.height = hiddenVideo.videoHeight;
+                offscreenContext = offscreenCanvas.getContext('2d');
+            }
+
+            // Check if video is ready
+            if (hiddenVideo.readyState < 2) {
+                console.warn('Video not ready yet, skipping screenshot');
                 _screenshotInFlight = false;
                 return;
             }
 
-            const reader = new FileReader();
-            reader.onloadend = async () => {
-                const base64data = reader.result.split(',')[1];
+            // Downscale to max 1280px wide for faster transfer
+            const MAX_WIDTH = 1280;
+            const srcW = hiddenVideo.videoWidth;
+            const srcH = hiddenVideo.videoHeight;
+            let destW = srcW;
+            let destH = srcH;
+            if (srcW > MAX_WIDTH) {
+                destW = MAX_WIDTH;
+                destH = Math.round(srcH * (MAX_WIDTH / srcW));
+            }
+            offscreenCanvas.width = destW;
+            offscreenCanvas.height = destH;
+            offscreenContext.drawImage(hiddenVideo, 0, 0, destW, destH);
 
-                if (!base64data || base64data.length < 100) {
-                    console.error('Invalid base64 data generated');
-                    _screenshotInFlight = false;
-                    return;
-                }
+            let qualityValue;
+            switch (quality) {
+                case 'high':
+                    qualityValue = 0.85;
+                    break;
+                case 'medium':
+                    qualityValue = 0.6;
+                    break;
+                case 'low':
+                    qualityValue = 0.4;
+                    break;
+                default:
+                    qualityValue = 0.6;
+            }
 
-                console.log(`Sending image: ${destW}x${destH}, ~${Math.round(base64data.length / 1024)}KB`);
+            offscreenCanvas.toBlob(
+                async blob => {
+                    if (!blob) {
+                        console.error('Failed to create blob from canvas');
+                        _screenshotInFlight = false;
+                        return;
+                    }
 
-                // Send image with prompt to HTTP API (response streams via IPC events)
-                const result = await ipcRenderer.invoke('send-image-content', {
-                    data: base64data,
-                    prompt: getManualScreenshotPrompt(),
-                });
-                _screenshotInFlight = false;
+                    const reader = new FileReader();
+                    reader.onloadend = async () => {
+                        const base64data = reader.result.split(',')[1];
 
-                if (result.success) {
-                    console.log(`Image response completed from ${result.model}`);
-                    // Response already displayed via streaming events (new-response/update-response)
-                } else {
-                    console.error('Failed to get image response:', result.error);
-                    cheatingDaddy.addNewResponse(`Error: ${result.error}`);
-                }
-            };
-            reader.readAsDataURL(blob);
-        },
-        'image/jpeg',
-        qualityValue
-    );
+                        if (!base64data || base64data.length < 100) {
+                            console.error('Invalid base64 data generated');
+                            _screenshotInFlight = false;
+                            return;
+                        }
+
+                        console.log(`Sending image: ${destW}x${destH}, ~${Math.round(base64data.length / 1024)}KB`);
+
+                        const result = await ipcRenderer.invoke('send-image-content', {
+                            data: base64data,
+                            prompt: getManualScreenshotPrompt(),
+                        });
+                        _screenshotInFlight = false;
+
+                        if (result.success) {
+                            console.log(`Image response completed from ${result.model}`);
+                        } else {
+                            console.error('Failed to get image response:', result.error);
+                            cheatingDaddy.addNewResponse(`Error: ${result.error}`);
+                        }
+                    };
+                    reader.readAsDataURL(blob);
+                },
+                'image/jpeg',
+                qualityValue
+            );
+        }
+    } catch (ocrError) {
+        console.error('Error during silent screen OCR capture:', ocrError);
+        _screenshotInFlight = false;
+    }
 }
 
 // Expose functions to global scope for external access
@@ -1163,6 +1214,8 @@ const cheatingDaddy = {
     stopCapture,
     sendTextMessage,
     handleShortcut,
+    captureManualScreenshot,
+    getManualScreenshotPrompt,
 
     // Storage API
     storage,
