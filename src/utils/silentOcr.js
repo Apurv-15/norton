@@ -1,3 +1,8 @@
+/**
+ * Silent OCR Utility
+ * Provides native macOS Vision framework (via JXA) and Windows Media OCR (via PowerShell)
+ * integration for silent screen capture and background text extraction without UI flickering.
+ */
 const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
