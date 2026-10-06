@@ -180,6 +180,7 @@ export class CustomizeView extends LitElement {
         selectedLanguage: { type: String },
         selectedImageQuality: { type: String },
         layoutMode: { type: String },
+        appLayoutMode: { type: String },
         keybinds: { type: Object },
         googleSearchEnabled: { type: Boolean },
         backgroundTransparency: { type: Number },
@@ -201,6 +202,7 @@ export class CustomizeView extends LitElement {
         this.selectedLanguage = 'en-US';
         this.selectedImageQuality = 'medium';
         this.layoutMode = 'normal';
+        this.appLayoutMode = 'full';
         this.keybinds = this.getDefaultKeybinds();
         this.onProfileChange = () => {};
         this.onLanguageChange = () => {};
@@ -232,6 +234,7 @@ export class CustomizeView extends LitElement {
             this.audioMode = prefs.audioMode ?? 'speaker_only';
             this.customPrompt = prefs.customPrompt ?? '';
             this.theme = prefs.theme ?? 'dark';
+            this.appLayoutMode = prefs.appLayoutMode ?? 'full';
             if (keybinds) {
                 this.keybinds = { ...this.getDefaultKeybinds(), ...keybinds };
             }
@@ -379,6 +382,20 @@ export class CustomizeView extends LitElement {
                 await ipcRenderer.invoke('update-google-search-setting', this.googleSearchEnabled);
             } catch (error) {
                 console.error('Failed to notify main process:', error);
+            }
+        }
+        this.requestUpdate();
+    }
+
+    async handleAppLayoutModeChange(e) {
+        this.appLayoutMode = e.target.checked ? 'menubar' : 'full';
+        await cheatingDaddy.storage.updatePreference('appLayoutMode', this.appLayoutMode);
+        if (window.require) {
+            try {
+                const { ipcRenderer } = window.require('electron');
+                await ipcRenderer.invoke('toggle-app-mode', this.appLayoutMode);
+            } catch (error) {
+                console.error('Failed to notify main process of layout mode change:', error);
             }
         }
         this.requestUpdate();
@@ -582,9 +599,13 @@ export class CustomizeView extends LitElement {
                             <option value="both">Both Speaker and Microphone</option>
                         </select>
                     </div>
-                    ${this.audioMode !== 'speaker_only'
-                        ? html` <div class="warning-callout">May cause unexpected behavior. Only change this if you know what you're doing.</div> `
-                        : ''}
+                    ${
+                        this.audioMode !== 'speaker_only'
+                            ? html`
+                                  <div class="warning-callout">May cause unexpected behavior. Only change this if you know what you're doing.</div>
+                              `
+                            : ''
+                    }
                     <div class="form-group">
                         <label class="form-label">Image Quality</label>
                         <select class="control" .value=${this.selectedImageQuality} @change=${this.handleImageQualitySelect}>
@@ -655,6 +676,20 @@ export class CustomizeView extends LitElement {
                             @input=${this.handleFontSizeChange}
                         />
                     </div>
+                    <div class="form-group" style="grid-column: span 2; margin-top: var(--space-sm);">
+                        <div class="toggle-row">
+                            <input
+                                id="menubar-mode-toggle"
+                                type="checkbox"
+                                class="toggle-input"
+                                ?checked=${this.appLayoutMode === 'menubar'}
+                                @change=${this.handleAppLayoutModeChange}
+                            />
+                            <label for="menubar-mode-toggle" class="toggle-label">
+                                Enable Menu Bar Mode (Lives in your macOS menu bar as a compact tray icon)
+                            </label>
+                        </div>
+                    </div>
                 </div>
             </section>
         `;
@@ -699,9 +734,11 @@ export class CustomizeView extends LitElement {
                         ${this.isClearing ? 'Clearing...' : 'Delete all data'}
                     </button>
                 </div>
-                ${this.clearStatusMessage
-                    ? html` <div class="status ${this.clearStatusType === 'success' ? 'success' : 'error'}">${this.clearStatusMessage}</div> `
-                    : ''}
+                ${
+                    this.clearStatusMessage
+                        ? html` <div class="status ${this.clearStatusType === 'success' ? 'success' : 'error'}">${this.clearStatusMessage}</div> `
+                        : ''
+                }
             </section>
         `;
     }
