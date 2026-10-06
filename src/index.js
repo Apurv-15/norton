@@ -11,14 +11,286 @@ process.stderr.on('error', err => {
     if (err.code !== 'EPIPE') throw err;
 });
 
-const { app, BrowserWindow, shell, ipcMain, dialog } = require('electron');
-const { createWindow, updateGlobalShortcuts, createMcqOverlay, destroyMcqOverlay } = require('./utils/window');
+const { app, BrowserWindow, shell, ipcMain, dialog, Tray, Menu } = require('electron');
+const path = require('path');
+const {
+    createWindow,
+    updateGlobalShortcuts,
+    createMcqOverlay,
+    destroyMcqOverlay,
+    createMenuBarWindow,
+    positionMenuBarWindow,
+    getMenuBarWindow,
+} = require('./utils/window');
 const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = require('./utils/gemini');
 const storage = require('./storage');
 const { extractTextFromPDF } = require('./utils/pdfProcessor');
 
 const geminiSessionRef = { current: null };
 let mainWindow = null;
+let tray = null;
+
+let latestResponseText = '';
+let latestStatusText = 'Ready';
+
+function updateTrayStatus(status) {
+    if (!status) return;
+    latestStatusText = typeof status === 'string' ? status : JSON.stringify(status);
+    if (tray && !tray.isDestroyed()) {
+        try {
+            tray.setToolTip(`Norton Helper - ${latestStatusText}`);
+        } catch (e) {}
+    }
+    rebuildTrayMenu();
+}
+
+function rebuildTrayMenu() {
+    if (!tray) return;
+
+    const preferences = storage.getPreferences();
+    const layoutMode = preferences.appLayoutMode || 'full';
+
+    let responseSnippet = 'No responses yet';
+    if (latestResponseText && latestResponseText.trim()) {
+        const clean = latestResponseText.replace(/\s+/g, ' ').trim();
+        responseSnippet = clean.length > 50 ? clean.substring(0, 47) + '...' : clean;
+    }
+
+    let statusIcon = '💡';
+    const lower = latestStatusText.toLowerCase();
+    if (lower.includes('error') || lower.includes('failed') || lower.includes('limit') || lower.includes('locked')) {
+        statusIcon = '⚠️';
+    } else if (
+        lower.includes('think') ||
+        lower.includes('transcrib') ||
+        lower.includes('connect') ||
+        lower.includes('switch') ||
+        lower.includes('record')
+    ) {
+        statusIcon = '⏳';
+    } else if (lower.includes('listen') || lower.includes('ready')) {
+        statusIcon = '🟢';
+    }
+
+    const activeProvider = preferences.activeProvider || 'auto';
+    const ocrFirstEnabled = preferences.ocrFirstEnabled !== false;
+
+    const menuItems = [
+        {
+            label: `${statusIcon} Status: ${latestStatusText}`,
+            enabled: false,
+        },
+        { type: 'separator' },
+        {
+            label: '📸 Stealth Capture',
+            accelerator: 'CmdOrCtrl+Shift+S',
+            click: () => {
+                triggerStealthCapture();
+            },
+        },
+        {
+            label: '⚡ Start/Stop Session',
+            accelerator: 'CmdOrCtrl+Shift+E',
+            click: () => {
+                triggerToggleSession();
+            },
+        },
+        {
+            label: '👁️ Toggle HUD Overlay',
+            accelerator: 'CmdOrCtrl+Shift+H',
+            click: () => {
+                toggleHUDOverlay();
+            },
+        },
+        { type: 'separator' },
+        {
+            label: '🧠 Active AI Provider',
+            submenu: [
+                {
+                    label: `⚡ Auto (Failover Chain) ${activeProvider === 'auto' ? '✓' : ''}`,
+                    type: 'radio',
+                    checked: activeProvider === 'auto',
+                    click: () => {
+                        storage.updatePreference('activeProvider', 'auto');
+                        rebuildTrayMenu();
+                    },
+                },
+                {
+                    label: `✨ Google Gemini (Multi-Key) ${activeProvider === 'gemini' ? '✓' : ''}`,
+                    type: 'radio',
+                    checked: activeProvider === 'gemini',
+                    click: () => {
+                        storage.updatePreference('activeProvider', 'gemini');
+                        rebuildTrayMenu();
+                    },
+                },
+                {
+                    label: `🌐 OpenRouter (Open Source) ${activeProvider === 'openrouter' ? '✓' : ''}`,
+                    type: 'radio',
+                    checked: activeProvider === 'openrouter',
+                    click: () => {
+                        storage.updatePreference('activeProvider', 'openrouter');
+                        rebuildTrayMenu();
+                    },
+                },
+                {
+                    label: `⚡ Groq (Llama / Mixtral) ${activeProvider === 'groq' ? '✓' : ''}`,
+                    type: 'radio',
+                    checked: activeProvider === 'groq',
+                    click: () => {
+                        storage.updatePreference('activeProvider', 'groq');
+                        rebuildTrayMenu();
+                    },
+                },
+            ],
+        },
+        {
+            label: `⚡ Save Tokens (OCR First) ${ocrFirstEnabled ? '✓' : ''}`,
+            type: 'checkbox',
+            checked: ocrFirstEnabled,
+            click: () => {
+                storage.updatePreference('ocrFirstEnabled', !ocrFirstEnabled);
+                rebuildTrayMenu();
+            },
+        },
+        { type: 'separator' },
+        {
+            label: `📜 AI Response: ${responseSnippet}`,
+            enabled: !!latestResponseText,
+            click: () => {
+                const { clipboard } = require('electron');
+                if (latestResponseText) {
+                    clipboard.writeText(latestResponseText);
+                }
+                toggleHUDOverlay(true);
+            },
+        },
+        { type: 'separator' },
+    ];
+
+    if (layoutMode === 'menubar') {
+        menuItems.push({
+            label: '↔️ Switch to Full App Window',
+            click: () => {
+                switchToFullMode();
+            },
+        });
+    } else {
+        menuItems.push({
+            label: '📌 Switch to Stealth Menu Bar HUD',
+            click: () => {
+                switchToMenuBarMode();
+            },
+        });
+    }
+
+    menuItems.push(
+        { type: 'separator' },
+        {
+            label: '❌ Quit Helper',
+            accelerator: 'CmdOrCtrl+Q',
+            role: 'quit',
+        }
+    );
+
+    const contextMenu = Menu.buildFromTemplate(menuItems);
+    tray.setContextMenu(contextMenu);
+}
+
+function updateTrayResponsePreview(text) {
+    if (!text) return;
+    latestResponseText = text;
+    rebuildTrayMenu();
+}
+
+function triggerStealthCapture() {
+    const preferences = storage.getPreferences();
+    const layoutMode = preferences.appLayoutMode || 'full';
+    if (layoutMode === 'menubar') {
+        const menuBarWin = createMenuBarWindow(tray);
+        menuBarWin.webContents.send('trigger-hidden-screenshot');
+    } else if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('trigger-hidden-screenshot');
+    }
+}
+
+function triggerToggleSession() {
+    const preferences = storage.getPreferences();
+    const layoutMode = preferences.appLayoutMode || 'full';
+    if (layoutMode === 'menubar') {
+        const menuBarWin = createMenuBarWindow(tray);
+        menuBarWin.webContents.send('trigger-capture-session');
+    } else if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('trigger-capture-session');
+    }
+}
+
+function createTray() {
+    const { nativeImage } = require('electron');
+    const iconPath = path.join(__dirname, 'assets/logoTemplate.png');
+    let icon = nativeImage.createFromPath(iconPath);
+    if (!icon.isEmpty()) {
+        icon = icon.resize({ width: 18, height: 18 });
+        icon.setTemplateImage(true);
+    } else {
+        icon = iconPath;
+    }
+    tray = new Tray(icon);
+    tray.setToolTip('System Helper');
+
+    rebuildTrayMenu();
+}
+
+function toggleHUDOverlay(forceShow = false) {
+    const menuBarWindow = createMenuBarWindow(tray);
+    if (!forceShow && menuBarWindow.isVisible()) {
+        menuBarWindow.hide();
+    } else {
+        positionMenuBarWindow(menuBarWindow, tray);
+        menuBarWindow.showInactive();
+    }
+}
+
+const toggleMenuBarPopup = toggleHUDOverlay;
+
+function switchToMenuBarMode() {
+    storage.updatePreference('appLayoutMode', 'menubar');
+    if (process.platform === 'darwin') {
+        // 'accessory' policy: app never activates on macOS, so interacting with
+        // menu bar / tray icons never steals keyboard focus from Chrome / ChatGPT.
+        try {
+            app.setActivationPolicy('accessory');
+        } catch (e) {
+            console.warn('setActivationPolicy failed:', e.message);
+        }
+        if (app.dock) app.dock.hide();
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.hide();
+    }
+    toggleHUDOverlay();
+    rebuildTrayMenu();
+}
+
+function switchToFullMode() {
+    storage.updatePreference('appLayoutMode', 'full');
+    if (process.platform === 'darwin') {
+        try {
+            app.setActivationPolicy('accessory');
+        } catch (e) {
+            console.warn('setActivationPolicy failed:', e.message);
+        }
+        if (app.dock) app.dock.hide();
+    }
+    const menuBarWindow = getMenuBarWindow();
+    if (menuBarWindow && !menuBarWindow.isDestroyed()) {
+        menuBarWindow.hide();
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.showInactive();
+    }
+    rebuildTrayMenu();
+}
 
 function createMainWindow() {
     mainWindow = createWindow(sendToRenderer, geminiSessionRef);
@@ -28,7 +300,6 @@ function createMainWindow() {
 // Electron drops session-only cookies (no Expires header) on app restart,
 // which logs the claude.ai webview out even though the partition is "persist:".
 // Round-trip them through a file across quit/start so the login survives.
-const path = require('path');
 const fs = require('fs');
 const SYSTEM_DESIGN_COOKIES_PATH = path.join(storage.getConfigDir(), 'system-design-cookies.json');
 const CHATGPT_COOKIES_PATH = path.join(storage.getConfigDir(), 'chatgpt-cookies.json');
@@ -113,9 +384,29 @@ app.whenReady().then(async () => {
     await restoreChatGPTCookies();
 
     createMainWindow();
+    createTray();
     setupGeminiIpcHandlers(geminiSessionRef);
     setupStorageIpcHandlers();
     setupGeneralIpcHandlers();
+
+    if (process.platform === 'darwin') {
+        try {
+            app.setActivationPolicy('accessory');
+        } catch (e) {
+            console.warn('setActivationPolicy failed:', e.message);
+        }
+        if (app.dock) app.dock.hide();
+    }
+
+    const preferences = storage.getPreferences();
+    const layoutMode = preferences.appLayoutMode || 'full';
+    if (layoutMode === 'full') {
+        if (mainWindow) {
+            mainWindow.show();
+        }
+    } else {
+        createMenuBarWindow(tray);
+    }
 });
 
 app.on('window-all-closed', () => {
@@ -207,6 +498,54 @@ function setupStorageIpcHandlers() {
         }
     });
 
+    ipcMain.handle('storage:get-gemini-api-keys', async () => {
+        try {
+            return { success: true, data: storage.getGeminiApiKeys() };
+        } catch (error) {
+            console.error('Error getting Gemini API keys:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:set-gemini-api-keys', async (event, keys) => {
+        try {
+            storage.setGeminiApiKeys(keys);
+            return { success: true };
+        } catch (error) {
+            console.error('Error setting Gemini API keys:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:get-locked-keys', async () => {
+        try {
+            return { success: true, data: storage.getLockedKeys() };
+        } catch (error) {
+            console.error('Error getting locked keys:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:unlock-key', async (event, key) => {
+        try {
+            storage.unlockKey(key);
+            return { success: true };
+        } catch (error) {
+            console.error('Error unlocking key:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:reset-key-locks', async () => {
+        try {
+            storage.resetKeyLocks();
+            return { success: true };
+        } catch (error) {
+            console.error('Error resetting key locks:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
     ipcMain.handle('storage:get-groq-api-key', async () => {
         try {
             return { success: true, data: storage.getGroqApiKey() };
@@ -241,6 +580,25 @@ function setupStorageIpcHandlers() {
             return { success: true };
         } catch (error) {
             console.error('Error setting Deepgram API key:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:get-openrouter-api-key', async () => {
+        try {
+            return { success: true, data: storage.getOpenrouterApiKey() };
+        } catch (error) {
+            console.error('Error getting OpenRouter API key:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:set-openrouter-api-key', async (event, openrouterApiKey) => {
+        try {
+            storage.setOpenrouterApiKey(openrouterApiKey);
+            return { success: true };
+        } catch (error) {
+            console.error('Error setting OpenRouter API key:', error);
             return { success: false, error: error.message };
         }
     });
@@ -446,13 +804,27 @@ function setupStorageIpcHandlers() {
 
 function setupGeneralIpcHandlers() {
     ipcMain.handle('capture-screen-native', async (event, quality = 'medium') => {
+        const preferences = storage.getPreferences();
+        const layoutMode = preferences.appLayoutMode || 'full';
+        const { getMenuBarWindow } = require('./utils/window');
+        const activeWindows = [];
+
+        // In full mode only, hide mainWindow so it is not captured in the screenshot
+        if (layoutMode === 'full' && mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+            activeWindows.push(mainWindow);
+            mainWindow.hide();
+            // Small delay to allow OS window server to update frame buffers
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        let result;
         if (process.platform === 'darwin') {
             const { execFile } = require('child_process');
             const fs = require('fs');
             const path = require('path');
             const os = require('os');
 
-            return new Promise(resolve => {
+            result = await new Promise(resolve => {
                 const tmpFile = path.join(os.tmpdir(), `norton-cap-${Date.now()}.jpg`);
                 execFile('/usr/sbin/screencapture', ['-x', '-t', 'jpg', tmpFile], err => {
                     if (err) {
@@ -473,24 +845,142 @@ function setupGeneralIpcHandlers() {
                     }
                 });
             });
+        } else {
+            const { desktopCapturer, screen } = require('electron');
+            try {
+                const primaryDisplay = screen.getPrimaryDisplay();
+                const { width, height } = primaryDisplay.size;
+                const sources = await desktopCapturer.getSources({
+                    types: ['screen'],
+                    thumbnailSize: { width: Math.min(width, 1920), height: Math.min(height, 1080) },
+                });
+                if (sources && sources.length > 0) {
+                    const qualityValue = quality === 'low' ? 50 : quality === 'high' ? 90 : 70;
+                    const base64 = sources[0].thumbnail.toJPEG(qualityValue).toString('base64');
+                    result = { success: true, data: base64 };
+                } else {
+                    result = { success: false, error: 'No screen sources available' };
+                }
+            } catch (error) {
+                console.error('Native screen capture error:', error);
+                result = { success: false, error: error.message };
+            }
         }
 
-        const { desktopCapturer, screen } = require('electron');
-        try {
-            const primaryDisplay = screen.getPrimaryDisplay();
-            const { width, height } = primaryDisplay.size;
-            const sources = await desktopCapturer.getSources({
-                types: ['screen'],
-                thumbnailSize: { width: Math.min(width, 1920), height: Math.min(height, 1080) },
-            });
-            if (sources && sources.length > 0) {
-                const qualityValue = quality === 'low' ? 50 : quality === 'high' ? 90 : 70;
-                const base64 = sources[0].thumbnail.toJPEG(qualityValue).toString('base64');
-                return { success: true, data: base64 };
+        // Restore windows only if in full mode
+        if (layoutMode === 'full') {
+            for (const win of activeWindows) {
+                if (win && !win.isDestroyed()) {
+                    win.showInactive();
+                }
             }
-            return { success: false, error: 'No screen sources available' };
+        }
+
+        return result;
+    });
+
+    ipcMain.handle('capture-clean-screenshot', async (event, quality = 'medium') => {
+        const { screen, nativeImage } = require('electron');
+        const preferences = storage.getPreferences();
+        const layoutMode = preferences.appLayoutMode || 'full';
+        const primaryDisplay = screen.getPrimaryDisplay();
+        const { x, y, width, height } = primaryDisplay.workArea;
+
+        const activeWindows = [];
+
+        // In full mode only, hide mainWindow so it is not in the screenshot
+        if (layoutMode === 'full' && mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+            activeWindows.push(mainWindow);
+            mainWindow.hide();
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        let base64Data = null;
+        if (process.platform === 'darwin') {
+            const { execFile } = require('child_process');
+            const fs = require('fs');
+            const path = require('path');
+            const os = require('os');
+
+            const buffer = await new Promise(resolve => {
+                const tmpFile = path.join(os.tmpdir(), `norton-clean-cap-${Date.now()}.jpg`);
+                execFile('/usr/sbin/screencapture', ['-x', '-t', 'jpg', tmpFile], err => {
+                    if (err) {
+                        console.error('screencapture clean failed:', err);
+                        return resolve(null);
+                    }
+                    try {
+                        if (fs.existsSync(tmpFile)) {
+                            const data = fs.readFileSync(tmpFile);
+                            try {
+                                fs.unlinkSync(tmpFile);
+                            } catch (e) {}
+                            return resolve(data);
+                        }
+                        return resolve(null);
+                    } catch (readErr) {
+                        return resolve(null);
+                    }
+                });
+            });
+
+            if (buffer) {
+                const qualityValue = quality === 'low' ? 50 : quality === 'high' ? 90 : 70;
+                const image = nativeImage.createFromBuffer(buffer);
+                base64Data = image.toJPEG(qualityValue).toString('base64');
+            }
+        } else {
+            const { desktopCapturer } = require('electron');
+            try {
+                const displaySize = primaryDisplay.size;
+                const sources = await desktopCapturer.getSources({
+                    types: ['screen'],
+                    thumbnailSize: { width: Math.min(displaySize.width, 1920), height: Math.min(displaySize.height, 1080) },
+                });
+                if (sources && sources.length > 0) {
+                    const image = sources[0].thumbnail;
+                    const imageSize = image.getSize();
+                    const scaleX = imageSize.width / primaryDisplay.bounds.width;
+                    const scaleY = imageSize.height / primaryDisplay.bounds.height;
+
+                    const cropRect = {
+                        x: Math.round(x * scaleX),
+                        y: Math.round(y * scaleY),
+                        width: Math.round(width * scaleX),
+                        height: Math.round(height * scaleY),
+                    };
+
+                    const croppedImage = image.crop(cropRect);
+                    const qualityValue = quality === 'low' ? 50 : quality === 'high' ? 90 : 70;
+                    base64Data = croppedImage.toJPEG(qualityValue).toString('base64');
+                }
+            } catch (error) {
+                console.error('DesktopCapturer clean failed:', error);
+            }
+        }
+
+        // Restore windows only if in full mode
+        if (layoutMode === 'full') {
+            for (const win of activeWindows) {
+                if (win && !win.isDestroyed()) {
+                    win.showInactive();
+                }
+            }
+        }
+
+        if (base64Data) {
+            return { success: true, data: base64Data };
+        }
+        return { success: false, error: 'Failed to capture or crop clean screenshot' };
+    });
+
+    ipcMain.handle('capture-screen-ocr', async () => {
+        try {
+            const { performSilentOcr } = require('./utils/silentOcr');
+            const text = await performSilentOcr();
+            return { success: true, text };
         } catch (error) {
-            console.error('Native screen capture error:', error);
+            console.error('Error in capture-screen-ocr handler:', error);
             return { success: false, error: error.message };
         }
     });
@@ -520,6 +1010,84 @@ function setupGeneralIpcHandlers() {
         }
     });
 
+    ipcMain.handle('toggle-app-mode', async (event, mode) => {
+        if (mode === 'menubar') {
+            switchToMenuBarMode();
+        } else {
+            switchToFullMode();
+        }
+        return { success: true };
+    });
+
+    ipcMain.handle('hide-menubar-window', () => {
+        const menuBarWindow = getMenuBarWindow();
+        if (menuBarWindow && !menuBarWindow.isDestroyed()) {
+            menuBarWindow.hide();
+        }
+        return { success: true };
+    });
+
+    ipcMain.handle('set-menubar-opacity', (event, opacity) => {
+        const val = Math.max(0.15, Math.min(1.0, parseFloat(opacity)));
+        const menuBarWindow = getMenuBarWindow();
+        if (menuBarWindow && !menuBarWindow.isDestroyed()) {
+            menuBarWindow.setOpacity(val);
+        }
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.setOpacity(val);
+        }
+        storage.updatePreference('menuBarOpacity', val);
+        return { success: true, opacity: val };
+    });
+
+    ipcMain.handle('set-menubar-size', (event, { width, height }) => {
+        const menuBarWindow = getMenuBarWindow();
+        if (menuBarWindow && !menuBarWindow.isDestroyed()) {
+            const w = Math.max(320, parseInt(width, 10));
+            const h = Math.max(250, parseInt(height, 10));
+            menuBarWindow.setSize(w, h);
+            storage.updatePreference('menuBarBounds', { width: w, height: h });
+        }
+        return { success: true };
+    });
+
+    ipcMain.handle('show-main-window-inactive', () => {
+        const preferences = storage.getPreferences();
+        const layoutMode = preferences.appLayoutMode || 'full';
+        if (layoutMode === 'full' && mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.showInactive();
+        }
+        return { success: true };
+    });
+
+    ipcMain.handle('save-screenshot-dialog', async (event, base64Data) => {
+        const { dialog } = require('electron');
+        const fs = require('fs');
+        const win = getMenuBarWindow() || mainWindow;
+        const result = await dialog.showSaveDialog(win, {
+            title: 'Save Screenshot',
+            defaultPath: `screenshot-${Date.now()}.jpg`,
+            filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png'] }],
+        });
+        if (!result.canceled && result.filePath) {
+            const buffer = Buffer.from(base64Data, 'base64');
+            fs.writeFileSync(result.filePath, buffer);
+            return { success: true };
+        }
+        return { success: false };
+    });
+
+    ipcMain.handle('ocr-base64', async (event, base64Data) => {
+        try {
+            const { performOcrOnBase64 } = require('./utils/silentOcr');
+            const text = await performOcrOnBase64(base64Data);
+            return { success: true, text };
+        } catch (error) {
+            console.error('Error in ocr-base64 handler:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
     ipcMain.on('update-keybinds', (event, newKeybinds) => {
         if (mainWindow) {
             // Also save to storage
@@ -533,3 +1101,11 @@ function setupGeneralIpcHandlers() {
         console.log(msg);
     });
 }
+
+module.exports = {
+    getTray: () => tray,
+    toggleHUDOverlay,
+    toggleMenuBarPopup,
+    updateTrayResponsePreview,
+    updateTrayStatus,
+};
