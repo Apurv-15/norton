@@ -558,6 +558,126 @@ export class MainView extends LitElement {
             font-weight: var(--font-weight-medium);
             color: var(--text-primary);
         }
+
+        /* ── Multi-Key Failover ── */
+        .keys-accordion {
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-xs);
+            margin-top: 4px;
+        }
+
+        .keys-toggle-btn {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 7px 10px;
+            color: var(--text-secondary);
+            font-size: var(--font-size-xs);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            transition: all var(--transition);
+        }
+
+        .keys-toggle-btn:hover {
+            color: var(--text-primary);
+            border-color: var(--border-strong);
+            background: var(--bg-hover);
+        }
+
+        .keys-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 12px;
+            margin-top: 4px;
+        }
+
+        .key-row {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .key-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 11px;
+        }
+
+        .key-title {
+            color: var(--text-secondary);
+            font-weight: var(--font-weight-medium);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .key-badge {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: var(--font-weight-medium);
+        }
+
+        .key-badge.active {
+            background: rgba(34, 197, 94, 0.15);
+            color: #22c55e;
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+
+        .key-badge.backup {
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+        }
+
+        .key-badge.locked {
+            background: rgba(239, 68, 68, 0.15);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .key-input-wrap {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+
+        .key-unlock-btn {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            border-radius: var(--radius-sm);
+            padding: 9px 10px;
+            font-size: 11px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all var(--transition);
+        }
+
+        .key-unlock-btn:hover {
+            background: rgba(255, 255, 255, 0.12);
+            border-color: var(--border-strong);
+        }
+
+        .keys-footer-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 4px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+        }
     `;
 
     static properties = {
@@ -574,8 +694,13 @@ export class MainView extends LitElement {
         _mode: { state: true },
         _token: { state: true },
         _geminiKey: { state: true },
+        _geminiKeys: { state: true },
+        _lockedKeys: { state: true },
+        _showBackupKeys: { state: true },
         _groqKey: { state: true },
         _deepgramKey: { state: true },
+        _openrouterKey: { state: true },
+        _openrouterModel: { state: true },
         _openaiKey: { state: true },
         _tokenError: { state: true },
         _keyError: { state: true },
@@ -601,8 +726,13 @@ export class MainView extends LitElement {
         this._mode = 'byok';
         this._token = '';
         this._geminiKey = '';
+        this._geminiKeys = ['', '', '', '', ''];
+        this._lockedKeys = {};
+        this._showBackupKeys = false;
         this._groqKey = '';
         this._deepgramKey = '';
+        this._openrouterKey = '';
+        this._openrouterModel = 'meta-llama/llama-3.3-70b-instruct';
         this._openaiKey = '';
         this._tokenError = false;
         this._keyError = false;
@@ -636,9 +766,13 @@ export class MainView extends LitElement {
 
             // Load keys
             this._token = creds.cloudToken || '';
-            this._geminiKey = (await cheatingDaddy.storage.getApiKey().catch(() => '')) || '';
+            this._geminiKeys = (await cheatingDaddy.storage.getGeminiApiKeys().catch(() => ['', '', '', '', ''])) || ['', '', '', '', ''];
+            this._geminiKey = this._geminiKeys[0] || (await cheatingDaddy.storage.getApiKey().catch(() => '')) || '';
+            this._lockedKeys = (await cheatingDaddy.storage.getLockedKeys().catch(() => ({}))) || {};
             this._groqKey = (await cheatingDaddy.storage.getGroqApiKey().catch(() => '')) || '';
             this._deepgramKey = (await cheatingDaddy.storage.getDeepgramApiKey().catch(() => '')) || '';
+            this._openrouterKey = (await cheatingDaddy.storage.getOpenrouterApiKey().catch(() => '')) || '';
+            this._openrouterModel = prefs.openrouterModel || 'meta-llama/llama-3.3-70b-instruct';
             this._openaiKey = creds.openaiKey || '';
 
             // Load local AI settings
@@ -655,11 +789,25 @@ export class MainView extends LitElement {
     connectedCallback() {
         super.connectedCallback();
         document.addEventListener('keydown', this.boundKeydownHandler);
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            this._keyLockedHandler = (event, data) => {
+                cheatingDaddy.storage.getLockedKeys().then(locked => {
+                    this._lockedKeys = locked || {};
+                    this.requestUpdate();
+                });
+            };
+            ipcRenderer.on('key-locked', this._keyLockedHandler);
+        }
     }
 
     disconnectedCallback() {
         super.disconnectedCallback();
         document.removeEventListener('keydown', this.boundKeydownHandler);
+        if (window.require && this._keyLockedHandler) {
+            const { ipcRenderer } = window.require('electron');
+            ipcRenderer.removeListener('key-locked', this._keyLockedHandler);
+        }
         if (this._animId) cancelAnimationFrame(this._animId);
     }
 
@@ -799,13 +947,57 @@ export class MainView extends LitElement {
     async _saveGeminiKey(val) {
         this._geminiKey = val;
         this._keyError = false;
-        await cheatingDaddy.storage.setApiKey(val);
+        if (!this._geminiKeys) this._geminiKeys = ['', '', '', '', ''];
+        this._geminiKeys[0] = val;
+        await cheatingDaddy.storage.setGeminiApiKeys(this._geminiKeys);
+        this.requestUpdate();
+    }
+
+    async _saveGeminiKeyIndex(index, val) {
+        if (!this._geminiKeys) this._geminiKeys = ['', '', '', '', ''];
+        this._geminiKeys = [...this._geminiKeys];
+        this._geminiKeys[index] = val;
+        if (index === 0) {
+            this._geminiKey = val;
+            this._keyError = false;
+        }
+        await cheatingDaddy.storage.setGeminiApiKeys(this._geminiKeys);
+        this.requestUpdate();
+    }
+
+    async _unlockKey(key) {
+        if (!key) return;
+        await cheatingDaddy.storage.unlockKey(key);
+        this._lockedKeys = (await cheatingDaddy.storage.getLockedKeys().catch(() => ({}))) || {};
+        this.requestUpdate();
+    }
+
+    async _resetAllLocks() {
+        await cheatingDaddy.storage.resetKeyLocks();
+        this._lockedKeys = {};
+        this.requestUpdate();
+    }
+
+    _toggleBackupKeys() {
+        this._showBackupKeys = !this._showBackupKeys;
         this.requestUpdate();
     }
 
     async _saveGroqKey(val) {
         this._groqKey = val;
         await cheatingDaddy.storage.setGroqApiKey(val);
+        this.requestUpdate();
+    }
+
+    async _saveOpenrouterKey(val) {
+        this._openrouterKey = val;
+        await cheatingDaddy.storage.setOpenrouterApiKey(val);
+        this.requestUpdate();
+    }
+
+    async _saveOpenrouterModel(val) {
+        this._openrouterModel = val;
+        await cheatingDaddy.storage.updatePreference('openrouterModel', val);
         this.requestUpdate();
     }
 
@@ -957,16 +1149,103 @@ export class MainView extends LitElement {
     _renderByokMode() {
         return html`
             <div class="form-group">
-                <label class="form-label">Gemini API Key</label>
-                <input
-                    type="password"
-                    placeholder="Required"
-                    .value=${this._geminiKey}
-                    @input=${e => this._saveGeminiKey(e.target.value)}
-                    class=${this._keyError ? 'error' : ''}
-                />
-                <div class="form-hint">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label class="form-label">Gemini API Key (Primary #1)</label>
+                    ${
+                        this._lockedKeys[this._geminiKeys[0]] && this._lockedKeys[this._geminiKeys[0]].locked
+                            ? html`<span class="key-badge locked">🔒 Rate Limited</span>`
+                            : this._geminiKeys[0]
+                              ? html`<span class="key-badge active">🟢 Ready</span>`
+                              : ''
+                    }
+                </div>
+                <div class="key-input-wrap">
+                    <input
+                        type="password"
+                        placeholder="Required (Key #1)"
+                        .value=${this._geminiKeys[0] || this._geminiKey || ''}
+                        @input=${e => this._saveGeminiKeyIndex(0, e.target.value)}
+                        class=${this._keyError ? 'error' : ''}
+                        style="flex: 1;"
+                    />
+                    ${
+                        this._lockedKeys[this._geminiKeys[0]] && this._lockedKeys[this._geminiKeys[0]].locked
+                            ? html`<button class="key-unlock-btn" @click=${() => this._unlockKey(this._geminiKeys[0])} title="Unlock this key">
+                                  Unlock
+                              </button>`
+                            : ''
+                    }
+                </div>
+                <div class="form-hint" style="display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
                     <span class="link" @click=${() => this.onExternalLink('https://aistudio.google.com/apikey')}>Get Gemini key</span>
+                    <span style="color: var(--text-muted); font-size: 11px;">
+                        ${this._geminiKeys.filter(k => k && k.trim()).length} of 5 keys configured
+                    </span>
+                </div>
+
+                <!-- Multi-key failover accordion (Keys 2-5) -->
+                <div class="keys-accordion">
+                    <button class="keys-toggle-btn" @click=${() => this._toggleBackupKeys()}>
+                        <span>🔄 Multi-Key Auto Failover (${this._geminiKeys.filter(k => k && k.trim()).length}/5 active)</span>
+                        <span>${this._showBackupKeys ? '▲ Hide' : '▼ Manage 5 Keys'}</span>
+                    </button>
+
+                    ${
+                        this._showBackupKeys
+                            ? html`
+                                  <div class="keys-list">
+                                      ${[1, 2, 3, 4].map(idx => {
+                                          const keyVal = this._geminiKeys[idx] || '';
+                                          const isLocked = keyVal && this._lockedKeys[keyVal] && this._lockedKeys[keyVal].locked;
+                                          const lockReason = isLocked ? this._lockedKeys[keyVal].reason : '';
+                                          return html`
+                                              <div class="key-row">
+                                                  <div class="key-header">
+                                                      <span class="key-title"> Backup Key #${idx + 1} </span>
+                                                      ${
+                                                          isLocked
+                                                              ? html`<span class="key-badge locked" title=${lockReason || 'Quota / Rate Limit'}
+                                                                    >🔒 Locked (Rate Limit)</span
+                                                                >`
+                                                              : keyVal
+                                                                ? html`<span class="key-badge backup">⚪ Backup Ready</span>`
+                                                                : html`<span style="color: var(--text-muted); font-size: 10px;">Empty</span>`
+                                                      }
+                                                  </div>
+                                                  <div class="key-input-wrap">
+                                                      <input
+                                                          type="password"
+                                                          placeholder="Optional Backup Gemini Key #${idx + 1}"
+                                                          .value=${keyVal}
+                                                          @input=${e => this._saveGeminiKeyIndex(idx, e.target.value)}
+                                                          style="flex: 1;"
+                                                      />
+                                                      ${
+                                                          isLocked
+                                                              ? html`<button
+                                                                    class="key-unlock-btn"
+                                                                    @click=${() => this._unlockKey(keyVal)}
+                                                                    title="Unlock this key"
+                                                                >
+                                                                    Unlock
+                                                                </button>`
+                                                              : ''
+                                                      }
+                                                  </div>
+                                              </div>
+                                          `;
+                                      })}
+
+                                      <div class="keys-footer-row">
+                                          <span style="font-size: 11px; color: var(--text-muted);">
+                                              Auto-rotates instantly when rate limit (429) or quota is hit.
+                                          </span>
+                                          <button class="key-unlock-btn" @click=${() => this._resetAllLocks()}>Reset All Locks</button>
+                                      </div>
+                                  </div>
+                              `
+                            : ''
+                    }
                 </div>
             </div>
 
@@ -985,6 +1264,30 @@ export class MainView extends LitElement {
             </div>
 
             <div class="form-group">
+                <label class="form-label">OpenRouter API Key (Open Source AI Backup)</label>
+                <input
+                    type="password"
+                    placeholder="Optional (Llama 3.3, DeepSeek, Gemini 2.0 Free)"
+                    .value=${this._openrouterKey}
+                    @input=${e => this._saveOpenrouterKey(e.target.value)}
+                />
+                <div class="form-hint" style="display:flex;justify-content:space-between;align-items:center;">
+                    <span class="link" @click=${() => this.onExternalLink('https://openrouter.ai/keys')}>Get OpenRouter key</span>
+                    <select
+                        .value=${this._openrouterModel}
+                        @change=${e => this._saveOpenrouterModel(e.target.value)}
+                        style="padding:2px 6px;font-size:11px;background:rgba(0,0,0,0.3);border:1px solid var(--border);color:var(--text-secondary);border-radius:4px;"
+                    >
+                        <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B (Fast & Smart)</option>
+                        <option value="deepseek/deepseek-chat">DeepSeek V3 (Top Reasoning)</option>
+                        <option value="google/gemini-2.0-flash-001">Gemini 2.0 Flash (Unlimited)</option>
+                        <option value="qwen/qwen-2.5-72b-instruct">Qwen 2.5 72B (Coding/DSA)</option>
+                        <option value="mistralai/mistral-small-24b-instruct-2501">Mistral Small 24B</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-group">
                 <label class="form-label">Groq API Key</label>
                 <input type="password" placeholder="Optional" .value=${this._groqKey} @input=${e => this._saveGroqKey(e.target.value)} />
                 <div class="form-hint">
@@ -995,7 +1298,16 @@ export class MainView extends LitElement {
             <div class="form-group">
                 <label class="form-label">Mode</label>
                 <select @change=${this._handleProfileChange}>
-                    ${[['interview','Job Interview'],['sales','Sales Call'],['meeting','Business Meeting'],['presentation','Presentation'],['negotiation','Negotiation'],['exam','Exam Assistant'],['dsa','DSA Interview'],['mcq','MCQ Auto-Solve']].map(([v,l]) => html`<option value=${v} ?selected=${this.selectedProfile === v}>${l}</option>`)}
+                    ${[
+                        ['interview', 'Job Interview'],
+                        ['sales', 'Sales Call'],
+                        ['meeting', 'Business Meeting'],
+                        ['presentation', 'Presentation'],
+                        ['negotiation', 'Negotiation'],
+                        ['exam', 'Exam Assistant'],
+                        ['dsa', 'DSA Interview'],
+                        ['mcq', 'MCQ Auto-Solve'],
+                    ].map(([v, l]) => html`<option value=${v} ?selected=${this.selectedProfile === v}>${l}</option>`)}
                 </select>
             </div>
 
@@ -1080,21 +1392,23 @@ export class MainView extends LitElement {
 
         return html`
             <div class="form-wrapper">
-                ${this._mode === 'local'
-                    ? html`
-                          <div class="title-row">
-                              <div class="page-title">Norton 340 <span class="mode-suffix">Local AI</span></div>
-                              <button
-                                  class="help-btn"
-                                  @click=${() => {
-                                      this._showLocalHelp = !this._showLocalHelp;
-                                  }}
-                              >
-                                  ${this._showLocalHelp ? closeIcon : helpIcon}
-                              </button>
-                          </div>
-                      `
-                    : html` <div class="page-title">${html`Norton 340 <span class="mode-suffix">BYOK</span>`}</div> `}
+                ${
+                    this._mode === 'local'
+                        ? html`
+                              <div class="title-row">
+                                  <div class="page-title">Norton 340 <span class="mode-suffix">Local AI</span></div>
+                                  <button
+                                      class="help-btn"
+                                      @click=${() => {
+                                          this._showLocalHelp = !this._showLocalHelp;
+                                      }}
+                                  >
+                                      ${this._showLocalHelp ? closeIcon : helpIcon}
+                                  </button>
+                              </div>
+                          `
+                        : html` <div class="page-title">${html`Norton 340 <span class="mode-suffix">BYOK</span>`}</div> `
+                }
                 <div class="page-subtitle">${this._mode === 'byok' ? 'Bring your own API keys' : 'Run models locally on your machine'}</div>
 
                 ${this._renderCVCard()}
@@ -1122,9 +1436,11 @@ export class MainView extends LitElement {
                     <span class="cv-card-title">${hasCV ? 'CV / Resume Loaded' : 'No CV / Resume Uploaded'}</span>
                 </div>
                 <div class="cv-card-body">
-                    ${hasCV
-                        ? html`<span class="cv-card-filename">${this.cvFilename} (${this.cvCharCount.toLocaleString()} chars)</span>`
-                        : html`<span class="cv-card-prompt">Click here to upload your CV / resume</span>`}
+                    ${
+                        hasCV
+                            ? html`<span class="cv-card-filename">${this.cvFilename} (${this.cvCharCount.toLocaleString()} chars)</span>`
+                            : html`<span class="cv-card-prompt">Click here to upload your CV / resume</span>`
+                    }
                 </div>
             </div>
         `;
