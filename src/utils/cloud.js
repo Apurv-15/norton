@@ -11,8 +11,10 @@ let onTurnComplete = null;
 
 function sendToRenderer(channel, data) {
     const windows = BrowserWindow.getAllWindows();
-    if (windows.length > 0) {
-        windows[0].webContents.send(channel, data);
+    for (const win of windows) {
+        if (win && !win.isDestroyed()) {
+            win.webContents.send(channel, data);
+        }
     }
 }
 
