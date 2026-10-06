@@ -13,13 +13,19 @@ const DEFAULT_CONFIG = {
 
 const DEFAULT_CREDENTIALS = {
     apiKey: '',
+    geminiApiKeys: ['', '', '', '', ''],
+    lockedKeys: {},
     groqApiKey: '',
     deepgramApiKey: '',
+    openrouterApiKey: '',
 };
 
 const DEFAULT_PREFERENCES = {
     customPrompt: '',
     providerMode: 'byok',
+    activeProvider: 'auto', // 'auto' | 'gemini' | 'openrouter' | 'groq'
+    openrouterModel: 'meta-llama/llama-3.3-70b-instruct',
+    ocrFirstEnabled: true, // Saves 85%+ tokens on screenshots
     selectedProfile: 'interview',
     selectedLanguage: 'en-US',
     selectedScreenshotInterval: '5',
@@ -35,6 +41,7 @@ const DEFAULT_PREFERENCES = {
     cvText: '',
     cvFilename: '',
     appMode: 'interview',
+    appLayoutMode: 'full',
 };
 
 const DEFAULT_KEYBINDS = null; // null means use system defaults
@@ -58,13 +65,15 @@ function getConfigDir() {
             console.warn('Failed to check executable portable dir:', e.message);
         }
 
-        try {
-            const devPortableDir = path.join(app.getAppPath(), 'portable-config');
-            if (fs.existsSync(devPortableDir)) {
-                return devPortableDir;
+        if (!app.isPackaged) {
+            try {
+                const devPortableDir = path.join(app.getAppPath(), 'portable-config');
+                if (fs.existsSync(devPortableDir)) {
+                    return devPortableDir;
+                }
+            } catch (e) {
+                console.warn('Failed to check dev portable dir:', e.message);
             }
-        } catch (e) {
-            console.warn('Failed to check dev portable dir:', e.message);
         }
     }
 
@@ -72,11 +81,17 @@ function getConfigDir() {
     let configDir;
 
     if (platform === 'win32') {
-        configDir = path.join(os.homedir(), 'AppData', 'Roaming', 'cheating-daddy-config');
+        const legacy = path.join(os.homedir(), 'AppData', 'Roaming', 'cheating-daddy-config');
+        configDir = path.join(os.homedir(), 'AppData', 'Roaming', 'norton-260-config');
+        if (fs.existsSync(legacy) && !fs.existsSync(configDir)) return legacy;
     } else if (platform === 'darwin') {
-        configDir = path.join(os.homedir(), 'Library', 'Application Support', 'cheating-daddy-config');
+        const legacy = path.join(os.homedir(), 'Library', 'Application Support', 'cheating-daddy-config');
+        configDir = path.join(os.homedir(), 'Library', 'Application Support', 'norton-260-config');
+        if (fs.existsSync(legacy) && !fs.existsSync(configDir)) return legacy;
     } else {
-        configDir = path.join(os.homedir(), '.config', 'cheating-daddy-config');
+        const legacy = path.join(os.homedir(), '.config', 'cheating-daddy-config');
+        configDir = path.join(os.homedir(), '.config', 'norton-260-config');
+        if (fs.existsSync(legacy) && !fs.existsSync(configDir)) return legacy;
     }
 
     return configDir;
@@ -177,8 +192,77 @@ function resetConfigDir() {
     console.log('Config directory initialized (all credentials and preferences preserved)');
 }
 
+function syncPortableConfigToSystem() {
+    try {
+        const { app } = require('electron');
+        if (!app) return;
+
+        let portableDir = null;
+        const potential = [path.join(process.cwd(), 'portable-config'), path.join(__dirname, '..', 'portable-config')];
+
+        for (const p of potential) {
+            if (fs.existsSync(p) && fs.statSync(p).isDirectory()) {
+                portableDir = p;
+                break;
+            }
+        }
+
+        if (!portableDir) return;
+        const targetDir = getConfigDir();
+        if (path.resolve(portableDir) === path.resolve(targetDir)) return;
+
+        const filesToSync = [
+            'credentials.json',
+            'preferences.json',
+            'config.json',
+            'keybinds.json',
+            'limits.json',
+            'system-design-cookies.json',
+            'chatgpt-cookies.json',
+        ];
+
+        fs.mkdirSync(targetDir, { recursive: true });
+
+        for (const file of filesToSync) {
+            const srcPath = path.join(portableDir, file);
+            const dstPath = path.join(targetDir, file);
+
+            if (fs.existsSync(srcPath)) {
+                if (!fs.existsSync(dstPath)) {
+                    fs.copyFileSync(srcPath, dstPath);
+                    console.log(`Synced ${file} from portable-config to ${targetDir}`);
+                } else if (file === 'credentials.json') {
+                    try {
+                        const dstCreds = JSON.parse(fs.readFileSync(dstPath, 'utf8'));
+                        const srcCreds = JSON.parse(fs.readFileSync(srcPath, 'utf8'));
+
+                        const dstHasKey =
+                            dstCreds.apiKey ||
+                            (dstCreds.geminiApiKeys && dstCreds.geminiApiKeys.some(k => k && k.trim())) ||
+                            dstCreds.openrouterApiKey ||
+                            dstCreds.groqApiKey;
+                        const srcHasKey =
+                            srcCreds.apiKey ||
+                            (srcCreds.geminiApiKeys && srcCreds.geminiApiKeys.some(k => k && k.trim())) ||
+                            srcCreds.openrouterApiKey ||
+                            srcCreds.groqApiKey;
+
+                        if (!dstHasKey && srcHasKey) {
+                            fs.copyFileSync(srcPath, dstPath);
+                            console.log(`Synced updated credentials.json from portable-config to ${targetDir}`);
+                        }
+                    } catch (e) {}
+                }
+            }
+        }
+    } catch (err) {
+        console.warn('Failed to sync portable config:', err.message);
+    }
+}
+
 // Initialize storage - call this on app startup
 function initializeStorage() {
+    syncPortableConfigToSystem();
     if (needsReset()) {
         resetConfigDir();
     } else {
@@ -221,11 +305,85 @@ function setCredentials(credentials) {
 }
 
 function getApiKey() {
-    return getCredentials().apiKey || '';
+    const creds = getCredentials();
+    if (creds.geminiApiKeys && Array.isArray(creds.geminiApiKeys)) {
+        const locked = creds.lockedKeys || {};
+        const available = creds.geminiApiKeys.find(k => k && k.trim() && (!locked[k] || !locked[k].locked));
+        if (available) return available;
+    }
+    return creds.apiKey || '';
 }
 
 function setApiKey(apiKey) {
-    return setCredentials({ apiKey });
+    const creds = getCredentials();
+    const keys = Array.isArray(creds.geminiApiKeys) ? [...creds.geminiApiKeys] : ['', '', '', '', ''];
+    keys[0] = apiKey || '';
+    return setCredentials({ apiKey: apiKey || '', geminiApiKeys: keys });
+}
+
+function getGeminiApiKeys() {
+    const creds = getCredentials();
+    let keys = creds.geminiApiKeys;
+    if (!Array.isArray(keys) || keys.length === 0) {
+        keys = creds.apiKey ? [creds.apiKey] : [];
+    }
+    const result = [];
+    for (let i = 0; i < 5; i++) {
+        result.push(keys[i] || '');
+    }
+    return result;
+}
+
+function setGeminiApiKeys(keys) {
+    const list = Array.isArray(keys) ? keys.slice(0, 5) : [];
+    while (list.length < 5) {
+        list.push('');
+    }
+    const primary = list.find(k => k && k.trim()) || '';
+    return setCredentials({
+        geminiApiKeys: list,
+        apiKey: primary,
+    });
+}
+
+function getLockedKeys() {
+    return getCredentials().lockedKeys || {};
+}
+
+function lockKey(key, reason = 'Rate limit or quota exceeded') {
+    if (!key) return;
+    const creds = getCredentials();
+    const locked = { ...(creds.lockedKeys || {}) };
+    locked[key] = {
+        locked: true,
+        reason: reason,
+        lockedAt: Date.now(),
+    };
+    return setCredentials({ lockedKeys: locked });
+}
+
+function unlockKey(key) {
+    if (!key) return;
+    const creds = getCredentials();
+    const locked = { ...(creds.lockedKeys || {}) };
+    delete locked[key];
+    return setCredentials({ lockedKeys: locked });
+}
+
+function resetKeyLocks() {
+    return setCredentials({ lockedKeys: {} });
+}
+
+function getNextAvailableGeminiKey() {
+    const keys = getGeminiApiKeys();
+    const locked = getLockedKeys();
+    for (let i = 0; i < keys.length; i++) {
+        const k = (keys[i] || '').trim();
+        if (k && (!locked[k] || !locked[k].locked)) {
+            return { key: k, index: i };
+        }
+    }
+    return null;
 }
 
 function getGroqApiKey() {
@@ -242,6 +400,14 @@ function getDeepgramApiKey() {
 
 function setDeepgramApiKey(deepgramApiKey) {
     return setCredentials({ deepgramApiKey });
+}
+
+function getOpenrouterApiKey() {
+    return getCredentials().openrouterApiKey || '';
+}
+
+function setOpenrouterApiKey(openrouterApiKey) {
+    return setCredentials({ openrouterApiKey });
 }
 
 // ============ PREFERENCES ============
@@ -577,10 +743,19 @@ module.exports = {
     setCredentials,
     getApiKey,
     setApiKey,
+    getGeminiApiKeys,
+    setGeminiApiKeys,
+    getLockedKeys,
+    lockKey,
+    unlockKey,
+    resetKeyLocks,
+    getNextAvailableGeminiKey,
     getGroqApiKey,
     setGroqApiKey,
     getDeepgramApiKey,
     setDeepgramApiKey,
+    getOpenrouterApiKey,
+    setOpenrouterApiKey,
 
     // Preferences
     getPreferences,
