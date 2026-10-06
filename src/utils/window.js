@@ -71,6 +71,7 @@ function createWindow(sendToRenderer, geminiSessionRef) {
             allowRunningInsecureContent: false,
         },
         backgroundColor: '#00000000',
+        show: false,
     });
     mainWindowRef = mainWindow;
     applyNonActivatingPanel(mainWindow);
@@ -82,7 +83,7 @@ function createWindow(sendToRenderer, geminiSessionRef) {
                 callback({ video: sources[0], audio: 'loopback' });
             });
         },
-        { useSystemPicker: true }
+        { useSystemPicker: false }
     );
 
     mainWindow.setContentProtection(true);
@@ -183,6 +184,7 @@ function getDefaultKeybinds() {
         scrollDown: isMac ? 'Cmd+Shift+Down' : 'Ctrl+Shift+Down',
         emergencyErase: isMac ? 'Cmd+Shift+E' : 'Ctrl+Shift+E',
         toggleNortonMode: 'Alt+N',
+        toggleMenuBarMode: isMac ? 'Alt+Shift+M' : 'Alt+Shift+M',
     };
 }
 
@@ -198,24 +200,64 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
 
     const movementActions = {
         moveUp: () => {
-            if (!mainWindow.isVisible()) return;
-            const [currentX, currentY] = mainWindow.getPosition();
-            mainWindow.setPosition(currentX, currentY - moveIncrement);
+            const prefs = storage.getPreferences();
+            const layoutMode = prefs.appLayoutMode || 'full';
+            if (layoutMode === 'menubar' && menuBarWindowRef && !menuBarWindowRef.isDestroyed() && menuBarWindowRef.isVisible()) {
+                const [w, h] = menuBarWindowRef.getSize();
+                const newH = Math.min(1000, h + 40);
+                menuBarWindowRef.setSize(w, newH);
+                storage.updatePreference('menuBarBounds', { width: w, height: newH });
+                return;
+            }
+            if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+                const [currentX, currentY] = mainWindow.getPosition();
+                mainWindow.setPosition(currentX, currentY - moveIncrement);
+            }
         },
         moveDown: () => {
-            if (!mainWindow.isVisible()) return;
-            const [currentX, currentY] = mainWindow.getPosition();
-            mainWindow.setPosition(currentX, currentY + moveIncrement);
+            const prefs = storage.getPreferences();
+            const layoutMode = prefs.appLayoutMode || 'full';
+            if (layoutMode === 'menubar' && menuBarWindowRef && !menuBarWindowRef.isDestroyed() && menuBarWindowRef.isVisible()) {
+                const [w, h] = menuBarWindowRef.getSize();
+                const newH = Math.max(250, h - 40);
+                menuBarWindowRef.setSize(w, newH);
+                storage.updatePreference('menuBarBounds', { width: w, height: newH });
+                return;
+            }
+            if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+                const [currentX, currentY] = mainWindow.getPosition();
+                mainWindow.setPosition(currentX, currentY + moveIncrement);
+            }
         },
         moveLeft: () => {
-            if (!mainWindow.isVisible()) return;
-            const [currentX, currentY] = mainWindow.getPosition();
-            mainWindow.setPosition(currentX - moveIncrement, currentY);
+            const prefs = storage.getPreferences();
+            const layoutMode = prefs.appLayoutMode || 'full';
+            if (layoutMode === 'menubar' && menuBarWindowRef && !menuBarWindowRef.isDestroyed() && menuBarWindowRef.isVisible()) {
+                const [w, h] = menuBarWindowRef.getSize();
+                const newW = Math.max(320, w - 40);
+                menuBarWindowRef.setSize(newW, h);
+                storage.updatePreference('menuBarBounds', { width: newW, height: h });
+                return;
+            }
+            if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+                const [currentX, currentY] = mainWindow.getPosition();
+                mainWindow.setPosition(currentX - moveIncrement, currentY);
+            }
         },
         moveRight: () => {
-            if (!mainWindow.isVisible()) return;
-            const [currentX, currentY] = mainWindow.getPosition();
-            mainWindow.setPosition(currentX + moveIncrement, currentY);
+            const prefs = storage.getPreferences();
+            const layoutMode = prefs.appLayoutMode || 'full';
+            if (layoutMode === 'menubar' && menuBarWindowRef && !menuBarWindowRef.isDestroyed() && menuBarWindowRef.isVisible()) {
+                const [w, h] = menuBarWindowRef.getSize();
+                const newW = Math.min(900, w + 40);
+                menuBarWindowRef.setSize(newW, h);
+                storage.updatePreference('menuBarBounds', { width: newW, height: h });
+                return;
+            }
+            if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+                const [currentX, currentY] = mainWindow.getPosition();
+                mainWindow.setPosition(currentX + moveIncrement, currentY);
+            }
         },
     };
 
@@ -235,15 +277,38 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
     if (keybinds.toggleVisibility) {
         try {
             globalShortcut.register(keybinds.toggleVisibility, () => {
-                if (mainWindow.isVisible()) {
-                    mainWindow.hide();
+                const prefs = storage.getPreferences();
+                const layoutMode = prefs.appLayoutMode || 'full';
+                if (layoutMode === 'menubar') {
+                    const { toggleHUDOverlay, toggleMenuBarPopup } = require('../index');
+                    const fn = toggleHUDOverlay || toggleMenuBarPopup;
+                    if (fn) fn();
                 } else {
-                    mainWindow.showInactive();
+                    if (mainWindow.isVisible()) {
+                        mainWindow.hide();
+                    } else {
+                        mainWindow.showInactive();
+                    }
                 }
             });
             console.log(`Registered toggleVisibility: ${keybinds.toggleVisibility}`);
         } catch (error) {
             console.error(`Failed to register toggleVisibility (${keybinds.toggleVisibility}):`, error);
+        }
+    }
+
+    // Register toggle Menu Bar Mode shortcut
+    if (keybinds.toggleMenuBarMode) {
+        try {
+            globalShortcut.register(keybinds.toggleMenuBarMode, () => {
+                console.log('Toggle Menu Bar Mode shortcut triggered');
+                const { toggleHUDOverlay, toggleMenuBarPopup } = require('../index');
+                const fn = toggleHUDOverlay || toggleMenuBarPopup;
+                if (fn) fn();
+            });
+            console.log(`Registered toggleMenuBarMode: ${keybinds.toggleMenuBarMode}`);
+        } catch (error) {
+            console.error(`Failed to register toggleMenuBarMode (${keybinds.toggleMenuBarMode}):`, error);
         }
     }
 
@@ -497,6 +562,7 @@ function createMcqOverlay() {
         hasShadow: false,
         resizable: false,
         skipTaskbar: true,
+        focusable: false,
         ...(process.platform === 'darwin' ? { type: 'panel' } : {}),
         webPreferences: { nodeIntegration: true, contextIsolation: false },
     });
@@ -521,6 +587,94 @@ function destroyMcqOverlay() {
     mcqOverlayWindow = null;
 }
 
+let menuBarWindowRef = null;
+
+function createMenuBarWindow(tray) {
+    if (menuBarWindowRef && !menuBarWindowRef.isDestroyed()) {
+        return menuBarWindowRef;
+    }
+
+    const preferences = storage.getPreferences();
+    const savedBounds = preferences.menuBarBounds || { width: 440, height: 550 };
+    const savedOpacity = typeof preferences.menuBarOpacity === 'number' ? preferences.menuBarOpacity : 1.0;
+
+    const menuBarWindow = new BrowserWindow({
+        width: Math.max(320, savedBounds.width || 440),
+        height: Math.max(250, savedBounds.height || 550),
+        minWidth: 320,
+        minHeight: 250,
+        maxWidth: 1000,
+        maxHeight: 1200,
+        frame: false,
+        transparent: true,
+        resizable: true,
+        alwaysOnTop: true,
+        show: false,
+        skipTaskbar: true,
+        opacity: savedOpacity,
+        // macOS: NSPanel non-activating panel so clicks inside the panel never steal focus from the active app
+        ...(process.platform === 'darwin' ? { type: 'panel' } : {}),
+        webPreferences: {
+            nodeIntegration: true,
+            contextIsolation: false,
+            webviewTag: true,
+            backgroundThrottling: false,
+        },
+        backgroundColor: '#00000000',
+    });
+
+    menuBarWindowRef = menuBarWindow;
+    applyNonActivatingPanel(menuBarWindow);
+    menuBarWindow.setContentProtection(true);
+    menuBarWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+
+    if (process.platform === 'darwin') {
+        try {
+            menuBarWindow.setHiddenInMissionControl(true);
+        } catch (error) {
+            console.warn('Could not hide menubar window from Mission Control:', error.message);
+        }
+    }
+
+    menuBarWindow.on('resize', () => {
+        if (!menuBarWindow.isDestroyed()) {
+            const [w, h] = menuBarWindow.getSize();
+            storage.updatePreference('menuBarBounds', { width: w, height: h });
+        }
+    });
+
+    // Load same index.html with query param
+    menuBarWindow.loadFile(path.join(__dirname, '../index.html'), { query: { mode: 'menubar' } });
+
+    menuBarWindow.on('closed', () => {
+        menuBarWindowRef = null;
+    });
+
+    return menuBarWindow;
+}
+
+function positionMenuBarWindow(menuBarWindow, tray) {
+    if (!tray || !menuBarWindow || menuBarWindow.isDestroyed()) return;
+    const trayBounds = tray.getBounds();
+    const windowBounds = menuBarWindow.getBounds();
+    const currentDisplay = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y }) || screen.getPrimaryDisplay();
+    const workArea = currentDisplay.workArea;
+
+    // Calculate coordinates (center horizontally under the tray icon)
+    let x = Math.round(trayBounds.x + trayBounds.width / 2 - windowBounds.width / 2);
+    let y = Math.round(trayBounds.y + trayBounds.height + 4);
+
+    // Keep within current display bounds
+    if (x + windowBounds.width > workArea.x + workArea.width) {
+        x = workArea.x + workArea.width - windowBounds.width - 10;
+    }
+    if (x < workArea.x + 10) {
+        x = workArea.x + 10;
+    }
+
+    menuBarWindow.setPosition(x, y, false);
+}
+
 module.exports = {
     createWindow,
     getDefaultKeybinds,
@@ -529,4 +683,7 @@ module.exports = {
     createMcqOverlay,
     destroyMcqOverlay,
     getMcqOverlayWindow: () => mcqOverlayWindow,
+    createMenuBarWindow,
+    positionMenuBarWindow,
+    getMenuBarWindow: () => menuBarWindowRef,
 };
