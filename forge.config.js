@@ -7,7 +7,7 @@ module.exports = {
             unpack: '**/{onnxruntime-node,onnxruntime-common,@huggingface/transformers,sharp,@img}/**',
         },
         extraResource: ['./src/assets/SystemAudioDump'],
-        name: 'Norton 340',
+        name: 'Norton 260',
         icon: 'src/assets/logo',
         // use `security find-identity -v -p codesigning` to find your identity
         // for macos signing
@@ -32,9 +32,9 @@ module.exports = {
         {
             name: '@electron-forge/maker-squirrel',
             config: {
-                name: 'norton_340',
-                productName: 'Norton340',
-                shortcutName: 'Norton340',
+                name: 'norton_260',
+                productName: 'Norton260',
+                shortcutName: 'Norton260',
                 setupIcon: 'src/assets/logo.ico',
                 createDesktopShortcut: true,
                 createStartMenuShortcut: true,
@@ -44,7 +44,7 @@ module.exports = {
             name: '@electron-forge/maker-dmg',
             platforms: ['darwin'],
             config: {
-                name: 'Norton340'
+                name: 'Norton260'
             }
         },
         {
