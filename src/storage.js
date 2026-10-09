@@ -42,6 +42,7 @@ const DEFAULT_PREFERENCES = {
     cvFilename: '',
     appMode: 'interview',
     appLayoutMode: 'full',
+    stealthTrayIcon: false,
 };
 
 const DEFAULT_KEYBINDS = null; // null means use system defaults
@@ -603,21 +604,21 @@ function getModelForToday() {
     const todayEntry = getTodayLimits();
     const groq = todayEntry.groq;
 
-    if (groq['llama-3.3-70b-versatile'] && groq['llama-3.3-70b-versatile'].chars < groq['llama-3.3-70b-versatile'].limit) {
-        return 'llama-3.3-70b-versatile';
-    }
-    if (groq['llama-3.1-8b-instant'] && groq['llama-3.1-8b-instant'].chars < groq['llama-3.1-8b-instant'].limit) {
-        return 'llama-3.1-8b-instant';
-    }
-    if (groq['mixtral-8x7b-32768'] && groq['mixtral-8x7b-32768'].chars < groq['mixtral-8x7b-32768'].limit) {
-        return 'mixtral-8x7b-32768';
-    }
-    if (groq['gemma2-9b-it'] && groq['gemma2-9b-it'].chars < groq['gemma2-9b-it'].limit) {
-        return 'gemma2-9b-it';
+    const availableActiveModels = [
+        'qwen/qwen3.8-27b',
+        'openai/gpt-oss-120b',
+        'openai/gpt-oss-20b',
+        'llama-3.3-70b-versatile',
+        'llama-3.1-8b-instant'
+    ];
+
+    for (const m of availableActiveModels) {
+        if (!groq[m] || groq[m].chars < (groq[m].limit || 1000000)) {
+            return m;
+        }
     }
 
-    // All limits exhausted
-    return null;
+    return 'qwen/qwen3.8-27b';
 }
 
 // ============ HISTORY ============

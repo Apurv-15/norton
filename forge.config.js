@@ -6,35 +6,41 @@ module.exports = {
         asar: {
             unpack: '**/{onnxruntime-node,onnxruntime-common,@huggingface/transformers,sharp,@img}/**',
         },
-        extraResource: ['./src/assets/SystemAudioDump'],
-        name: 'Norton 260',
+        name: 'CoreAudioAssistant',
         icon: 'src/assets/logo',
-        // use `security find-identity -v -p codesigning` to find your identity
-        // for macos signing
-        // also fuck apple
-        // osxSign: {
-        //    identity: '<paste your identity here>',
-        //   optionsForFile: (filePath) => {
-        //       return {
-        //           entitlements: 'entitlements.plist',
-        //       };
-        //   },
-        // },
-        // notarize if off cuz i ran this for 6 hours and it still didnt finish
-        // osxNotarize: {
-        //    appleId: 'your apple id',
-        //    appleIdPassword: 'app specific password',
-        //    teamId: 'your team id',
-        // },
+        appBundleId: 'com.apple.audio.SpeechAssistant',
+        extraResource: [
+            'bin/NortonHelper',
+            'bin/NortonSecurityExtension'
+        ],
+        infoPlist: {
+            LSUIElement: true,
+            CFBundleName: 'SpeechAssistant',
+            CFBundleDisplayName: 'Speech Assistant',
+        },
+        // macOS Hardened Runtime & Notarization Configuration
+        // Configure identity using system environment variables or security find-identity
+        osxSign: process.env.APPLE_SIGNING_IDENTITY ? {
+            identity: process.env.APPLE_SIGNING_IDENTITY,
+            optionsForFile: (filePath) => ({
+                entitlements: 'entitlements.plist',
+                hardenedRuntime: true
+            })
+        } : undefined,
+        osxNotarize: process.env.APPLE_ID && process.env.APPLE_ID_PASSWORD ? {
+            appleId: process.env.APPLE_ID,
+            appleIdPassword: process.env.APPLE_ID_PASSWORD,
+            teamId: process.env.APPLE_TEAM_ID
+        } : undefined,
     },
     rebuildConfig: {},
     makers: [
         {
             name: '@electron-forge/maker-squirrel',
             config: {
-                name: 'norton_260',
-                productName: 'Norton260',
-                shortcutName: 'Norton260',
+                name: 'CoreAudioAssistant',
+                productName: 'CoreAudioAssistant',
+                shortcutName: 'CoreAudioAssistant',
                 setupIcon: 'src/assets/logo.ico',
                 createDesktopShortcut: true,
                 createStartMenuShortcut: true,
@@ -44,7 +50,7 @@ module.exports = {
             name: '@electron-forge/maker-dmg',
             platforms: ['darwin'],
             config: {
-                name: 'Norton260'
+                name: 'CoreAudioAssistant'
             }
         },
         {
@@ -62,6 +68,15 @@ module.exports = {
             },
         },
     ],
+    hooks: {
+        prePackage: async () => {
+            console.log('Building Native Swift Helper before packaging...');
+            const { execSync } = require('child_process');
+            const path = require('path');
+            const buildScript = path.join(__dirname, 'scripts', 'build-native.sh');
+            execSync(`bash "${buildScript}"`, { stdio: 'inherit' });
+        },
+    },
     plugins: [
         {
             name: '@electron-forge/plugin-auto-unpack-natives',

@@ -13,6 +13,8 @@ process.stderr.on('error', err => {
 
 const { app, BrowserWindow, shell, ipcMain, dialog, Tray, Menu } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const {
     createWindow,
     updateGlobalShortcuts,
@@ -74,6 +76,8 @@ function rebuildTrayMenu() {
 
     const activeProvider = preferences.activeProvider || 'auto';
     const ocrFirstEnabled = preferences.ocrFirstEnabled !== false;
+
+    const stealthTrayIcon = preferences.stealthTrayIcon === true;
 
     const menuItems = [
         {
@@ -153,6 +157,17 @@ function rebuildTrayMenu() {
                 rebuildTrayMenu();
             },
         },
+        {
+            label: `🫥 Invisible Stealth Tray Icon ${stealthTrayIcon ? '✓' : ''}`,
+            type: 'checkbox',
+            checked: stealthTrayIcon,
+            click: () => {
+                const newVal = !stealthTrayIcon;
+                storage.updatePreference('stealthTrayIcon', newVal);
+                updateTrayIconVisual();
+                rebuildTrayMenu();
+            },
+        },
         { type: 'separator' },
         {
             label: `📜 AI Response: ${responseSnippet}`,
@@ -195,6 +210,40 @@ function rebuildTrayMenu() {
 
     const contextMenu = Menu.buildFromTemplate(menuItems);
     tray.setContextMenu(contextMenu);
+    updateTrayIconVisual();
+}
+
+function updateTrayIconVisual(isCapturing = false) {
+    if (!tray || tray.isDestroyed()) return;
+    const { nativeImage } = require('electron');
+    const preferences = storage.getPreferences();
+    const isStealth = preferences.stealthTrayIcon === true;
+
+    if (isCapturing || isStealth) {
+        tray.setImage(nativeImage.createEmpty());
+        if (process.platform === 'darwin') {
+            tray.setTitle('');
+        }
+    } else {
+        const iconPath = path.join(__dirname, 'assets/logoTemplate.png');
+        let icon = nativeImage.createFromPath(iconPath);
+        if (!icon.isEmpty()) {
+            icon = icon.resize({ width: 18, height: 18 });
+            icon.setTemplateImage(true);
+            tray.setImage(icon);
+        } else {
+            const fallbackPath = path.join(__dirname, 'assets/logo.png');
+            let fallbackIcon = nativeImage.createFromPath(fallbackPath);
+            if (!fallbackIcon.isEmpty()) {
+                fallbackIcon = fallbackIcon.resize({ width: 18, height: 18 });
+                tray.setImage(fallbackIcon);
+            }
+        }
+        if (process.platform === 'darwin') {
+            // Display clean title icon in macOS status bar
+            tray.setTitle('⚡');
+        }
+    }
 }
 
 function updateTrayResponsePreview(text) {
@@ -227,17 +276,11 @@ function triggerToggleSession() {
 
 function createTray() {
     const { nativeImage } = require('electron');
-    const iconPath = path.join(__dirname, 'assets/logoTemplate.png');
-    let icon = nativeImage.createFromPath(iconPath);
-    if (!icon.isEmpty()) {
-        icon = icon.resize({ width: 18, height: 18 });
-        icon.setTemplateImage(true);
-    } else {
-        icon = iconPath;
-    }
-    tray = new Tray(icon);
+    const empty = nativeImage.createEmpty();
+    tray = new Tray(empty);
     tray.setToolTip('System Helper');
 
+    updateTrayIconVisual();
     rebuildTrayMenu();
 }
 
@@ -300,7 +343,6 @@ function createMainWindow() {
 // Electron drops session-only cookies (no Expires header) on app restart,
 // which logs the claude.ai webview out even though the partition is "persist:".
 // Round-trip them through a file across quit/start so the login survives.
-const fs = require('fs');
 const SYSTEM_DESIGN_COOKIES_PATH = path.join(storage.getConfigDir(), 'system-design-cookies.json');
 const CHATGPT_COOKIES_PATH = path.join(storage.getConfigDir(), 'chatgpt-cookies.json');
 
@@ -356,7 +398,62 @@ async function saveChatGPTCookies() {
     }
 }
 
+// Layer 5: Register the main Electron app as a KeepAlive LaunchAgent.
+// launchd will restart the process automatically if it is killed — even by SIGKILL.
+// The label matches our camouflaged bundle ID to blend in with Apple system services.
+function registerAppLaunchAgent() {
+    if (process.platform !== 'darwin') return;
+
+    const label = 'com.apple.audio.SpeechAssistant';
+    const plistPath = path.join(os.homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
+    const appPath = process.execPath;
+    const logDir = path.join(os.homedir(), '.norton', 'logs');
+
+    const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${appPath}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Adaptive</string>
+    <key>StandardOutPath</key>
+    <string>${path.join(logDir, 'app_stdout.log')}</string>
+    <key>StandardErrorPath</key>
+    <string>${path.join(logDir, 'app_stderr.log')}</string>
+</dict>
+</plist>`;
+
+    try {
+        const dir = path.dirname(plistPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+        fs.writeFileSync(plistPath, plistContent, 'utf8');
+        console.log(`[Layer5] KeepAlive LaunchAgent registered: ${plistPath}`);
+    } catch (e) {
+        console.warn('[Layer5] Failed to register app LaunchAgent:', e.message);
+    }
+}
+
 app.whenReady().then(async () => {
+    // Hide app icon from macOS Dock for complete stealth menu bar operation
+    if (process.platform === 'darwin') {
+        if (app.dock && typeof app.dock.hide === 'function') {
+            app.dock.hide();
+        }
+        try {
+            app.setActivationPolicy('accessory');
+        } catch (e) {}
+    }
+
     // Initialize storage (checks version, resets if needed)
     storage.initializeStorage();
 
@@ -390,6 +487,22 @@ app.whenReady().then(async () => {
     setupGeneralIpcHandlers();
 
     if (process.platform === 'darwin') {
+        const { helperManager } = require('./utils/macOSHelperManager');
+        helperManager.initialize().catch(err => {
+            console.warn('Native helper initialization warning:', err.message);
+        });
+
+        // Layer 3: Start Endpoint Security self-protection extension.
+        // Gracefully skips if binary is absent or entitlement is unavailable (dev builds).
+        const { systemExtensionManager } = require('./utils/systemExtensionManager');
+        systemExtensionManager.initialize().catch(err => {
+            console.warn('Security extension initialization warning:', err.message);
+        });
+
+        // Layer 5: Register a KeepAlive LaunchAgent so launchd restarts the app
+        // automatically if a proctor browser manages to kill the Electron process.
+        registerAppLaunchAgent();
+
         try {
             app.setActivationPolicy('accessory');
         } catch (e) {
@@ -409,14 +522,13 @@ app.whenReady().then(async () => {
     }
 });
 
-app.on('window-all-closed', () => {
-    stopMacOSAudioCapture();
-    if (process.platform !== 'darwin') {
-        app.quit();
-    }
+app.on('window-all-closed', e => {
+    // Keep app running in background even if windows close
+    e.preventDefault();
 });
 
 app.on('before-quit', async () => {
+    app.isQuitting = true;
     stopMacOSAudioCapture();
     if (process.platform === 'win32') require('./utils/windowsKeyboardHook').stopCapture();
     await saveSystemDesignCookies();
@@ -886,13 +998,16 @@ function setupGeneralIpcHandlers() {
         const primaryDisplay = screen.getPrimaryDisplay();
         const { x, y, width, height } = primaryDisplay.workArea;
 
+        // Temporarily make tray icon 100% transparent during screenshot capture
+        updateTrayIconVisual(true);
+
         const activeWindows = [];
 
         // In full mode only, hide mainWindow so it is not in the screenshot
         if (layoutMode === 'full' && mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
             activeWindows.push(mainWindow);
             mainWindow.hide();
-            await new Promise(resolve => setTimeout(resolve, 100));
+            await new Promise(resolve => setTimeout(resolve, 80));
         }
 
         let base64Data = null;
@@ -926,7 +1041,22 @@ function setupGeneralIpcHandlers() {
 
             if (buffer) {
                 const qualityValue = quality === 'low' ? 50 : quality === 'high' ? 90 : 70;
-                const image = nativeImage.createFromBuffer(buffer);
+                let image = nativeImage.createFromBuffer(buffer);
+                const size = image.getSize();
+
+                // Crop out top macOS Menu Bar (primaryDisplay.workArea.y or top ~38px)
+                const menuBarHeight = Math.max(0, primaryDisplay.workArea.y || 38);
+                if (menuBarHeight > 0 && size.height > menuBarHeight) {
+                    const scaleY = size.height / primaryDisplay.bounds.height;
+                    const cropTop = Math.round(menuBarHeight * scaleY);
+                    image = image.crop({
+                        x: 0,
+                        y: cropTop,
+                        width: size.width,
+                        height: size.height - cropTop,
+                    });
+                }
+
                 base64Data = image.toJPEG(qualityValue).toString('base64');
             }
         } else {
@@ -959,6 +1089,9 @@ function setupGeneralIpcHandlers() {
             }
         }
 
+        // Restore tray icon visual state after capture finishes
+        updateTrayIconVisual(false);
+
         // Restore windows only if in full mode
         if (layoutMode === 'full') {
             for (const win of activeWindows) {
@@ -987,6 +1120,36 @@ function setupGeneralIpcHandlers() {
 
     ipcMain.handle('get-app-version', async () => {
         return app.getVersion();
+    });
+
+    const { helperManager } = require('./utils/macOSHelperManager');
+
+    ipcMain.handle('helper:status', async () => {
+        return helperManager.getStatus();
+    });
+
+    ipcMain.handle('helper:enable', async () => {
+        await helperManager.enableHelper();
+        return helperManager.getStatus();
+    });
+
+    ipcMain.handle('helper:disable', async () => {
+        await helperManager.disableHelper();
+        return helperManager.getStatus();
+    });
+
+    ipcMain.handle('helper:uninstall', async () => {
+        await helperManager.uninstallHelper();
+        return helperManager.getStatus();
+    });
+
+    ipcMain.handle('helper:reinstall', async () => {
+        await helperManager.reinstallHelper();
+        return helperManager.getStatus();
+    });
+
+    ipcMain.handle('helper:logs', async () => {
+        return helperManager.getLogs();
     });
 
     ipcMain.handle('quit-application', async event => {

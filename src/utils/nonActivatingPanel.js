@@ -50,11 +50,42 @@ function getMacObjc() {
     return macObjc;
 }
 
-// On macOS, Electron's native { type: 'panel' } BrowserWindow option combined with
-// app.setActivationPolicy('accessory') provides native NSPanel non-activating focus isolation.
+// On macOS, apply deep NSWindow stealth on top of Electron's native NSPanel.
+// This hides the window from CGWindowListCopyWindowInfo (used by proctor browsers),
+// Mission Control/Exposé, and the application windows menu.
 function applyMacNonActivatingPanel(win) {
-    // Rely on Electron native NSPanel & accessory activation policy
-    return;
+    try {
+        const { sel, msgSendSetULong, msgSendSetBool, msgSendULong } = getMacObjc();
+
+        const hwndBuf = win.getNativeWindowHandle();
+        // The native handle buffer contains a pointer-sized integer. On 64-bit
+        // macOS this is always a BigUInt64; fall back to UInt32 for safety.
+        const nsView = hwndBuf.readBigUInt64LE
+            ? Number(hwndBuf.readBigUInt64LE())
+            : hwndBuf.readUInt32LE();
+
+        if (!nsView) return;
+
+        // Electron's getNativeWindowHandle() returns a pointer to an NSView on macOS.
+        // We must call [view window] to get the actual NSWindow before sending window messages.
+        const selWindow = sel('window');
+        const nsWindow = msgSendULong(nsView, selWindow);
+
+        if (!nsWindow) return;
+
+        // (We rely on Electron's setContentProtection(true) elsewhere for NSWindowSharingNone)
+
+        // NSWindowCollectionBehaviorCanJoinAllSpaces  = 1  (show on every Space)
+        // NSWindowCollectionBehaviorStationary        = 16 (invisible to Exposé / Mission Control)
+        // NSWindowCollectionBehaviorFullScreenAuxiliary = 256 (stays visible over fullscreen apps)
+        const selSetCollBehavior = sel('setCollectionBehavior:');
+        msgSendSetULong(nsWindow, selSetCollBehavior, 1 | 16 | 256);
+
+        // Removed _setExcludedFromWindowsMenu: as it crashes on ElectronNSPanel
+    } catch (e) {
+        // FFI failures are non-fatal; the window still works, just with less stealth.
+        console.warn('[nonActivatingPanel] macOS FFI warning:', e.message);
+    }
 }
 
 function applyNonActivatingPanel(win) {

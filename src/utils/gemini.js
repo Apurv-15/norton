@@ -302,14 +302,22 @@ async function sendToGroq(transcription) {
         return;
     }
 
-    const modelToUse = getModelForToday();
-    if (!modelToUse) {
+    const primaryModel = getModelForToday();
+    if (!primaryModel) {
         console.log('All Groq daily limits exhausted');
         sendToRenderer('update-status', 'Groq limits reached for today');
         return;
     }
 
-    console.log(`Sending to Groq (${modelToUse}):`, transcription.substring(0, 100) + '...');
+    const candidateModels = [
+        primaryModel,
+        'qwen/qwen3.8-27b',
+        'openai/gpt-oss-120b',
+        'openai/gpt-oss-20b',
+        'llama-3.1-8b-instant',
+        'mixtral-8x7b-32768'
+    ];
+    const modelsToTry = [...new Set(candidateModels)];
 
     groqConversationHistory.push({
         role: 'user',
@@ -321,25 +329,62 @@ async function sendToGroq(transcription) {
     }
 
     try {
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                Authorization: `Bearer ${groqApiKey}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model: modelToUse,
-                messages: [{ role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' }, ...groqConversationHistory],
-                stream: true,
-                temperature: 0.1,
-                max_tokens: 1500,
-            }),
-        });
+        let response = null;
+        let modelToUse = primaryModel;
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Groq API error:', response.status, errorText);
-            sendToRenderer('update-status', `Groq error: ${response.status}`);
+        for (const modelCandidate of modelsToTry) {
+            modelToUse = modelCandidate;
+            console.log(`Sending to Groq (${modelToUse}):`, transcription.substring(0, 100) + '...');
+
+            try {
+                const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        Authorization: `Bearer ${groqApiKey}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        model: modelToUse,
+                        messages: [{ role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' }, ...groqConversationHistory],
+                        stream: true,
+                        temperature: 0.1,
+                        max_tokens: 1500,
+                    }),
+                });
+
+                if (res.status === 404 || res.status === 400) {
+                    const errBody = await res.text();
+                    if (
+                        res.status === 404 ||
+                        errBody.includes('model_decommissioned') ||
+                        errBody.includes('model_not_found') ||
+                        errBody.includes('does not exist')
+                    ) {
+                        console.warn(`Groq model ${modelToUse} returned ${res.status} (${errBody.substring(0, 100)}), immediately falling back...`);
+                        continue;
+                    } else {
+                        console.error('Groq API error:', res.status, errBody);
+                        sendToRenderer('update-status', `Groq error: ${res.status}`);
+                        return;
+                    }
+                }
+
+                if (!res.ok) {
+                    const errorText = await res.text();
+                    console.error('Groq API error:', res.status, errorText);
+                    sendToRenderer('update-status', `Groq error: ${res.status}`);
+                    return;
+                }
+
+                response = res;
+                break;
+            } catch (fetchErr) {
+                console.error('Groq fetch error:', fetchErr);
+            }
+        }
+
+        if (!response || !response.ok) {
+            sendToRenderer('update-status', 'Groq model unavailable on API');
             return;
         }
 
@@ -755,37 +800,6 @@ async function attemptReconnect() {
     return false;
 }
 
-function killExistingSystemAudioDump() {
-    return new Promise(resolve => {
-        console.log('Checking for existing SystemAudioDump processes...');
-
-        // Kill any existing SystemAudioDump processes
-        const killProc = spawn('pkill', ['-f', 'SystemAudioDump'], {
-            stdio: 'ignore',
-        });
-
-        killProc.on('close', code => {
-            if (code === 0) {
-                console.log('Killed existing SystemAudioDump processes');
-            } else {
-                console.log('No existing SystemAudioDump processes found');
-            }
-            resolve();
-        });
-
-        killProc.on('error', err => {
-            console.log('Error checking for existing processes (this is normal):', err.message);
-            resolve();
-        });
-
-        // Timeout after 2 seconds
-        setTimeout(() => {
-            killProc.kill();
-            resolve();
-        }, 2000);
-    });
-}
-
 function triggerDeepgramGroqAnswer() {
     const textToSend = currentTranscription.trim();
     currentTranscription = '';
@@ -912,44 +926,45 @@ async function initializeDeepgramSession(apiKey, customPrompt = '', profile = 'i
     return connectDeepgramWebSocket(language);
 }
 
+const { helperManager } = require('./macOSHelperManager');
+
 async function startMacOSAudioCapture(geminiSessionRef) {
     if (process.platform !== 'darwin') return false;
 
-    // Kill any existing SystemAudioDump processes first
-    await killExistingSystemAudioDump();
-
+    console.log('Starting macOS audio capture via native helper manager...');
     hasShownPermissionDialog = false;
 
-    console.log('Starting macOS audio capture with SystemAudioDump...');
+    // Initialize & connect to legitimate macOS helper service
+    await helperManager.initialize();
+    const success = await helperManager.startAudioCapture();
 
-    const { app } = require('electron');
-    const path = require('path');
+    if (!success) {
+        console.warn('Native helper IPC audio capture request returned false, attempting process launch...');
+        let systemAudioPath;
+        const { app } = require('electron');
+        const path = require('path');
+        if (app.isPackaged) {
+            systemAudioPath = path.join(process.resourcesPath, 'SystemAudioDump');
+        } else {
+            systemAudioPath = path.join(__dirname, '../assets', 'SystemAudioDump');
+        }
 
-    let systemAudioPath;
-    if (app.isPackaged) {
-        systemAudioPath = path.join(process.resourcesPath, 'SystemAudioDump');
-    } else {
-        systemAudioPath = path.join(__dirname, '../assets', 'SystemAudioDump');
-    }
-
-    console.log('SystemAudioDump path:', systemAudioPath);
-
-    const spawnOptions = {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: {
-            ...process.env,
-        },
-    };
-
-    systemAudioProc = spawn(systemAudioPath, [], spawnOptions);
-
-    if (!systemAudioProc.pid) {
-        console.error('Failed to start SystemAudioDump');
+        if (fs.existsSync(systemAudioPath)) {
+            const spawnOptions = { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env } };
+            systemAudioProc = spawn(systemAudioPath, [], spawnOptions);
+            if (systemAudioProc && systemAudioProc.pid) {
+                console.log('Fallback audio capture started with PID:', systemAudioProc.pid);
+                setupAudioProcListeners(systemAudioProc, geminiSessionRef);
+                return true;
+            }
+        }
         return false;
     }
 
-    console.log('SystemAudioDump started with PID:', systemAudioProc.pid);
+    return true;
+}
 
+function setupAudioProcListeners(proc, geminiSessionRef) {
     const CHUNK_DURATION = 0.1;
     const SAMPLE_RATE = 24000;
     const BYTES_PER_SAMPLE = 2;
@@ -958,16 +973,13 @@ async function startMacOSAudioCapture(geminiSessionRef) {
 
     let audioBuffer = Buffer.alloc(0);
 
-    systemAudioProc.stdout.on('data', data => {
-        if (isManualMode && !isManualRecording) {
-            return;
-        }
+    proc.stdout.on('data', data => {
+        if (isManualMode && !isManualRecording) return;
         audioBuffer = Buffer.concat([audioBuffer, data]);
 
         while (audioBuffer.length >= CHUNK_SIZE) {
             const chunk = audioBuffer.slice(0, CHUNK_SIZE);
             audioBuffer = audioBuffer.slice(CHUNK_SIZE);
-
             const monoChunk = CHANNELS === 2 ? convertStereoToMono(chunk) : chunk;
 
             if (currentProviderMode === 'cloud') {
@@ -980,48 +992,28 @@ async function startMacOSAudioCapture(geminiSessionRef) {
                 const base64Data = monoChunk.toString('base64');
                 sendAudioToGemini(base64Data, geminiSessionRef);
             }
-
-            if (process.env.DEBUG_AUDIO) {
-                console.log(`Processed audio chunk: ${chunk.length} bytes`);
-                saveDebugAudio(monoChunk, 'system_audio');
-            }
-        }
-
-        const maxBufferSize = SAMPLE_RATE * BYTES_PER_SAMPLE * 1;
-        if (audioBuffer.length > maxBufferSize) {
-            audioBuffer = audioBuffer.slice(-maxBufferSize);
         }
     });
 
-    systemAudioProc.stderr.on('data', data => {
+    proc.stderr.on('data', data => {
         const errorMsg = data.toString();
-        console.error('SystemAudioDump stderr:', errorMsg);
-
+        console.error('Audio capture stderr:', errorMsg);
         if (!hasShownPermissionDialog && (errorMsg.includes('SCStreamErrorDomain') || errorMsg.includes('-3821'))) {
             hasShownPermissionDialog = true;
-            console.error('[Permissions] Missing macOS Screen Recording permission detected.');
             dialog.showMessageBox({
                 type: 'warning',
                 title: 'Permission Required',
                 message: 'macOS Screen & Audio Recording Permission Required',
-                detail: 'Norton 340 requires "Screen & System Audio Recording" or "Screen Recording" permission to capture your system audio.\n\nPlease enable it under:\nSystem Settings > Privacy & Security > Screen & System Audio Recording (or Screen Recording)\n\nAfter enabling, please restart the application.',
-                buttons: ['OK'],
+                detail: 'Norton 260 requires Screen Recording permission to capture system audio.\n\nPlease enable it in System Settings > Privacy & Security > Screen Recording.',
+                buttons: ['OK']
             });
-            sendToRenderer('update-status', 'Error: Permissions missing');
         }
     });
 
-    systemAudioProc.on('close', code => {
-        console.log('SystemAudioDump process closed with code:', code);
+    proc.on('close', code => {
+        console.log('Audio capture process exited with code:', code);
         systemAudioProc = null;
     });
-
-    systemAudioProc.on('error', err => {
-        console.error('SystemAudioDump process error:', err);
-        systemAudioProc = null;
-    });
-
-    return true;
 }
 
 function convertStereoToMono(stereoBuffer) {
@@ -1029,7 +1021,6 @@ function convertStereoToMono(stereoBuffer) {
     const monoBuffer = Buffer.alloc(samples * 2);
 
     for (let i = 0; i < samples; i++) {
-        // Average L + R channels so neither side is lost
         const leftSample = stereoBuffer.readInt16LE(i * 4);
         const rightSample = stereoBuffer.readInt16LE(i * 4 + 2);
         const mono = Math.round((leftSample + rightSample) / 2);
@@ -1040,8 +1031,9 @@ function convertStereoToMono(stereoBuffer) {
 }
 
 function stopMacOSAudioCapture() {
+    helperManager.stopAudioCapture();
     if (systemAudioProc) {
-        console.log('Stopping SystemAudioDump...');
+        console.log('Stopping fallback audio process...');
         systemAudioProc.kill('SIGTERM');
         systemAudioProc = null;
     }
@@ -1787,7 +1779,6 @@ module.exports = {
     initializeNewSession,
     saveConversationTurn,
     getCurrentSessionData,
-    killExistingSystemAudioDump,
     startMacOSAudioCapture,
     convertStereoToMono,
     stopMacOSAudioCapture,

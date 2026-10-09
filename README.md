@@ -1,6 +1,6 @@
 # Norton 340
 
-An Electron-based real‑time assistant that captures screen and audio for contextual AI responses (a fork of `cheating-daddy`).
+An Electron-based real‑time assistant that captures screen and audio for contextual AI responses 
 
 ## Getting Started
 

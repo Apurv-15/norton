@@ -1,4 +1,4 @@
-const { BrowserWindow, globalShortcut, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, screen } = require('electron');
 const path = require('node:path');
 const storage = require('../storage');
 const { applyNonActivatingPanel } = require('./nonActivatingPanel');
@@ -112,7 +112,13 @@ function createWindow(sendToRenderer, geminiSessionRef) {
     }
 
     mainWindow.loadFile(path.join(__dirname, '../index.html'));
-    mainWindow.setTitle('System Helper'); // ponytail: innocuous name in Task Manager / Activity Monitor
+    mainWindow.setTitle(''); // Layer 1: empty title prevents name-based window enumeration
+
+    // Layer 2: exclude from CGWindowListCopyWindowInfo so proctor browsers
+    // cannot see this window via their window enumeration scan
+    if (process.platform === 'darwin') {
+        mainWindow.setContentProtection(true);
+    }
 
     // After window is created, initialize keybinds
     mainWindow.webContents.once('dom-ready', () => {
@@ -161,6 +167,13 @@ function createWindow(sendToRenderer, geminiSessionRef) {
         setTimeout(() => {
             mainWindow.webContents.send('window-shown', { hiddenFor });
         }, 80);
+    });
+
+    mainWindow.on('close', event => {
+        if (!app.isQuitting) {
+            event.preventDefault();
+            mainWindow.hide();
+        }
     });
 
     setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef);
@@ -571,7 +584,11 @@ function createMcqOverlay() {
     mcqOverlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     if (process.platform === 'win32') mcqOverlayWindow.setAlwaysOnTop(true, 'screen-saver', 1);
     mcqOverlayWindow.loadFile(path.join(__dirname, '../assets/mcq-overlay.html'));
-    mcqOverlayWindow.setTitle('System Helper');
+    mcqOverlayWindow.setTitle(''); // Layer 1: empty title prevents name-based window enumeration
+    // Layer 2: exclude from CGWindowListCopyWindowInfo
+    if (process.platform === 'darwin') {
+        mcqOverlayWindow.setContentProtection(true);
+    }
     mcqOverlayWindow.webContents.once('dom-ready', () => {
         const isVisible = mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef.isVisible() : true;
         mcqOverlayWindow.webContents.send('main-window-visibility', isVisible);
@@ -645,6 +662,13 @@ function createMenuBarWindow(tray) {
 
     // Load same index.html with query param
     menuBarWindow.loadFile(path.join(__dirname, '../index.html'), { query: { mode: 'menubar' } });
+
+    menuBarWindow.on('close', event => {
+        if (!app.isQuitting) {
+            event.preventDefault();
+            menuBarWindow.hide();
+        }
+    });
 
     menuBarWindow.on('closed', () => {
         menuBarWindowRef = null;

@@ -89,8 +89,10 @@ typings/
 # Vite
 .vite/
 
-# Electron-Forge
+# Electron-Forge & Binaries
 out/
+bin/
+.build/
 .specstory
 .specstory/
 
