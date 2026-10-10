@@ -73,13 +73,16 @@ function applyMacNonActivatingPanel(win) {
 
         if (!nsWindow) return;
 
-        // (We rely on Electron's setContentProtection(true) elsewhere for NSWindowSharingNone)
-
         // NSWindowCollectionBehaviorCanJoinAllSpaces  = 1  (show on every Space)
         // NSWindowCollectionBehaviorStationary        = 16 (invisible to Exposé / Mission Control)
         // NSWindowCollectionBehaviorFullScreenAuxiliary = 256 (stays visible over fullscreen apps)
         const selSetCollBehavior = sel('setCollectionBehavior:');
         msgSendSetULong(nsWindow, selSetCollBehavior, 1 | 16 | 256);
+
+        // Explicitly set NSWindowSharingNone (0) at native AppKit level
+        // NSWindowSharingNone prevents the window from being read or captured by any screen recording / capture APIs
+        const selSetSharingType = sel('setSharingType:');
+        msgSendSetULong(nsWindow, selSetSharingType, 0);
 
         // Removed _setExcludedFromWindowsMenu: as it crashes on ElectronNSPanel
     } catch (e) {

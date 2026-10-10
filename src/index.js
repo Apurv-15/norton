@@ -209,7 +209,12 @@ function rebuildTrayMenu() {
     );
 
     const contextMenu = Menu.buildFromTemplate(menuItems);
-    tray.setContextMenu(contextMenu);
+    if (process.platform !== 'darwin') {
+        tray.setContextMenu(contextMenu);
+    } else {
+        // Save for manual popUpContextMenu on right click only
+        tray._contextMenu = contextMenu;
+    }
     updateTrayIconVisual();
 }
 
@@ -217,31 +222,23 @@ function updateTrayIconVisual(isCapturing = false) {
     if (!tray || tray.isDestroyed()) return;
     const { nativeImage } = require('electron');
     const preferences = storage.getPreferences();
-    const isStealth = preferences.stealthTrayIcon === true;
+    const isStealth = preferences.stealthTrayIcon !== false; // Default to stealth/invisible
+
+    if (process.platform === 'darwin') {
+        tray.setTitle('');
+    }
 
     if (isCapturing || isStealth) {
         tray.setImage(nativeImage.createEmpty());
-        if (process.platform === 'darwin') {
-            tray.setTitle('');
-        }
     } else {
         const iconPath = path.join(__dirname, 'assets/logoTemplate.png');
         let icon = nativeImage.createFromPath(iconPath);
         if (!icon.isEmpty()) {
-            icon = icon.resize({ width: 18, height: 18 });
+            icon = icon.resize({ width: 16, height: 16 });
             icon.setTemplateImage(true);
             tray.setImage(icon);
         } else {
-            const fallbackPath = path.join(__dirname, 'assets/logo.png');
-            let fallbackIcon = nativeImage.createFromPath(fallbackPath);
-            if (!fallbackIcon.isEmpty()) {
-                fallbackIcon = fallbackIcon.resize({ width: 18, height: 18 });
-                tray.setImage(fallbackIcon);
-            }
-        }
-        if (process.platform === 'darwin') {
-            // Display clean title icon in macOS status bar
-            tray.setTitle('⚡');
+            tray.setImage(nativeImage.createEmpty());
         }
     }
 }
@@ -249,7 +246,6 @@ function updateTrayIconVisual(isCapturing = false) {
 function updateTrayResponsePreview(text) {
     if (!text) return;
     latestResponseText = text;
-    rebuildTrayMenu();
 }
 
 function triggerStealthCapture() {
@@ -279,6 +275,20 @@ function createTray() {
     const empty = nativeImage.createEmpty();
     tray = new Tray(empty);
     tray.setToolTip('System Helper');
+
+    // On macOS: do NOT attach tray.setContextMenu() directly.
+    // Native macOS NSMenu items are drawn by the OS WindowServer and CANNOT be protected by setContentProtection.
+    // Instead, left-clicking the tray toggles our custom NSPanel HUD window (which HAS setContentProtection(true) and is 100% invisible on screen shares)!
+    tray.on('click', () => {
+        toggleHUDOverlay();
+    });
+
+    // Right click shows settings menu if needed
+    tray.on('right-click', () => {
+        if (tray._contextMenu) {
+            tray.popUpContextMenu(tray._contextMenu);
+        }
+    });
 
     updateTrayIconVisual();
     rebuildTrayMenu();
