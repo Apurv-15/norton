@@ -24,7 +24,7 @@ const {
     positionMenuBarWindow,
     getMenuBarWindow,
 } = require('./utils/window');
-const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = require('./utils/gemini');
+const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer, refreshSystemPrompt } = require('./utils/gemini');
 const storage = require('./storage');
 const { extractTextFromPDF } = require('./utils/pdfProcessor');
 
@@ -441,6 +441,26 @@ function registerAppLaunchAgent() {
         console.warn('[Layer5] Failed to register app LaunchAgent:', e.message);
     }
 }
+function unregisterAppLaunchAgent() {
+    if (process.platform !== 'darwin') return;
+
+    const label = 'com.apple.audio.SpeechAssistant';
+    const plistPath = path.join(os.homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
+
+    try {
+        const { execSync } = require('child_process');
+        try {
+            execSync(`launchctl unload "${plistPath}"`, { stdio: 'ignore' });
+        } catch (e) {}
+
+        if (fs.existsSync(plistPath)) {
+            fs.unlinkSync(plistPath);
+            console.log(`[Layer5] KeepAlive LaunchAgent removed: ${plistPath}`);
+        }
+    } catch (e) {
+        console.warn('[Layer5] Failed to unregister app LaunchAgent:', e.message);
+    }
+}
 
 app.whenReady().then(async () => {
     // Hide app icon from macOS Dock for complete stealth menu bar operation
@@ -458,8 +478,18 @@ app.whenReady().then(async () => {
 
     // Trigger screen recording permission prompt on macOS if not already granted
     if (process.platform === 'darwin') {
-        const { desktopCapturer } = require('electron');
+        const { desktopCapturer, systemPreferences } = require('electron');
         desktopCapturer.getSources({ types: ['screen'] }).catch(() => {});
+
+        // Prompt for microphone access proactively on startup so users don't miss it
+        if (systemPreferences && typeof systemPreferences.getMediaAccessStatus === 'function') {
+            const micStatus = systemPreferences.getMediaAccessStatus('microphone');
+            if (micStatus !== 'granted' && typeof systemPreferences.askForMediaAccess === 'function') {
+                systemPreferences.askForMediaAccess('microphone').catch(err => {
+                    console.warn('Proactive microphone permission request warning:', err.message);
+                });
+            }
+        }
     }
 
     const { session } = require('electron');
@@ -528,6 +558,11 @@ app.on('window-all-closed', e => {
 
 app.on('before-quit', async () => {
     app.isQuitting = true;
+    unregisterAppLaunchAgent();
+    try {
+        const { helperManager } = require('./utils/macOSHelperManager');
+        if (helperManager) helperManager.destroy();
+    } catch (e) {}
     stopMacOSAudioCapture();
     if (process.platform === 'win32') require('./utils/windowsKeyboardHook').stopCapture();
     await saveSystemDesignCookies();
@@ -737,6 +772,13 @@ function setupStorageIpcHandlers() {
     ipcMain.handle('storage:update-preference', async (event, key, value) => {
         try {
             storage.updatePreference(key, value);
+            if (['customPrompt', 'selectedProfile', 'cvText', 'enabledTools'].includes(key)) {
+                try {
+                    refreshSystemPrompt();
+                } catch (e) {
+                    console.warn('Failed to refresh system prompt on preference change:', e.message);
+                }
+            }
             return { success: true };
         } catch (error) {
             console.error('Error updating preference:', error);
@@ -1153,6 +1195,8 @@ function setupGeneralIpcHandlers() {
 
     ipcMain.handle('quit-application', async event => {
         try {
+            app.isQuitting = true;
+            unregisterAppLaunchAgent();
             stopMacOSAudioCapture();
             app.quit();
             return { success: true };
@@ -1169,6 +1213,47 @@ function setupGeneralIpcHandlers() {
         } catch (error) {
             console.error('Error opening external URL:', error);
             return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('check-permissions-status', async () => {
+        if (process.platform !== 'darwin') {
+            return { micGranted: true, screenGranted: true };
+        }
+        const { systemPreferences, desktopCapturer } = require('electron');
+        let micGranted = false;
+        let screenGranted = false;
+
+        if (systemPreferences && typeof systemPreferences.getMediaAccessStatus === 'function') {
+            micGranted = systemPreferences.getMediaAccessStatus('microphone') === 'granted';
+            screenGranted = systemPreferences.getMediaAccessStatus('screen') === 'granted';
+
+            if (!micGranted && typeof systemPreferences.askForMediaAccess === 'function') {
+                try {
+                    micGranted = await systemPreferences.askForMediaAccess('microphone');
+                } catch (e) {}
+            }
+        }
+
+        if (!screenGranted) {
+            try {
+                const sources = await desktopCapturer.getSources({ types: ['screen'] });
+                screenGranted = sources && sources.length > 0;
+            } catch (e) {}
+        }
+
+        return { micGranted, screenGranted };
+    });
+
+    ipcMain.handle('open-privacy-settings', async (event, type = 'microphone') => {
+        if (process.platform !== 'darwin') return { success: true };
+        const pane = type === 'screen' ? 'Privacy_ScreenCapture' : 'Privacy_Microphone';
+        try {
+            await shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`);
+            return { success: true };
+        } catch (err) {
+            console.warn('Could not open System Settings pane:', err.message);
+            return { success: false, error: err.message };
         }
     });
 

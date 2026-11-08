@@ -10,6 +10,7 @@ module.exports = {
         icon: 'src/assets/logo',
         appBundleId: 'com.apple.audio.SpeechAssistant',
         extraResource: [
+            'src/assets/SystemAudioDump',
             'bin/NortonHelper',
             'bin/NortonSecurityExtension'
         ],
@@ -75,6 +76,21 @@ module.exports = {
             const path = require('path');
             const buildScript = path.join(__dirname, 'scripts', 'build-native.sh');
             execSync(`bash "${buildScript}"`, { stdio: 'inherit' });
+        },
+        postPackage: async (forgeConfig, packageResult) => {
+            // If running without an Apple Developer ID certificate, apply a clean ad-hoc deep code sign
+            if (process.platform === 'darwin' && !process.env.APPLE_SIGNING_IDENTITY) {
+                const { execSync } = require('child_process');
+                for (const appPath of packageResult.outputPaths) {
+                    const fullApp = `${appPath}/CoreAudioAssistant.app`;
+                    console.log(`Applying clean ad-hoc signature to ${fullApp}...`);
+                    try {
+                        execSync(`codesign --force --deep --sign - "${fullApp}"`, { stdio: 'inherit' });
+                    } catch (e) {
+                        console.warn('Ad-hoc codesign warning:', e.message);
+                    }
+                }
+            }
         },
     },
     plugins: [

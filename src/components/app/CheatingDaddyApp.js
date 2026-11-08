@@ -1338,6 +1338,24 @@ export class CheatingDaddyApp extends LitElement {
         const prefs = await cheatingDaddy.storage.getPreferences();
         const providerMode = prefs.providerMode || 'byok';
 
+        // Pre-flight permission verification on macOS
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            try {
+                const perms = await ipcRenderer.invoke('check-permissions-status');
+                if (perms && !perms.micGranted && (prefs.audioMode === 'both' || prefs.audioMode === 'mic_only')) {
+                    alert(
+                        'Microphone Permission Required:\n\n' +
+                        'Norton needs Microphone access to hear you speak.\n\n' +
+                        'Please allow Microphone access in System Settings > Privacy & Security > Microphone.'
+                    );
+                    await ipcRenderer.invoke('open-privacy-settings', 'microphone');
+                }
+            } catch (permErr) {
+                console.warn('Permission verification error:', permErr);
+            }
+        }
+
         if (providerMode === 'cloud') {
             const creds = await cheatingDaddy.storage.getCredentials();
             if (!creds.cloudToken || creds.cloudToken.trim() === '') {

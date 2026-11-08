@@ -31,7 +31,7 @@ const DEFAULT_PREFERENCES = {
     selectedScreenshotInterval: '5',
     selectedImageQuality: 'medium',
     advancedMode: false,
-    audioMode: 'speaker_only',
+    audioMode: 'both',
     fontSize: 'medium',
     backgroundTransparency: 0.8,
     googleSearchEnabled: false,

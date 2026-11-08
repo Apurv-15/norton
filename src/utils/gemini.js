@@ -1,6 +1,8 @@
 const { GoogleGenAI, Modality } = require('@google/genai');
 const { BrowserWindow, ipcMain, dialog } = require('electron');
 const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 const WebSocket = require('ws');
 const { saveDebugAudio } = require('../audioUtils');
 const { getSystemPrompt } = require('./prompts');
@@ -78,6 +80,7 @@ const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_DELAY = 2000;
 
 function sendToRenderer(channel, data) {
+    if (!BrowserWindow || typeof BrowserWindow.getAllWindows !== 'function') return;
     const windows = BrowserWindow.getAllWindows();
     for (const win of windows) {
         if (win && !win.isDestroyed()) {
@@ -128,33 +131,55 @@ function buildContextMessage() {
 }
 
 // Conversation management functions
+function getEffectiveSystemPrompt(forceRefresh = false) {
+    if (currentSystemPrompt && !forceRefresh) return currentSystemPrompt;
+
+    const prefs = getPreferences() || {};
+    const enabledTools = prefs.enabledTools || [];
+    const googleSearchEnabled = enabledTools.some(tool => tool.googleSearch);
+    const profile = currentProfile || prefs.selectedProfile || 'interview';
+
+    let customPrompt = currentCustomPrompt !== null && currentCustomPrompt !== undefined
+        ? currentCustomPrompt
+        : (prefs.customPrompt || '');
+
+    let finalCustomPrompt = customPrompt;
+    if (prefs.cvText && prefs.cvText.trim()) {
+        finalCustomPrompt = `${finalCustomPrompt}\n\n[CV/Resume Context]:\n${prefs.cvText}`;
+    }
+
+    currentSystemPrompt = getSystemPrompt(profile, finalCustomPrompt, googleSearchEnabled);
+    return currentSystemPrompt;
+}
+
+function refreshSystemPrompt() {
+    return getEffectiveSystemPrompt(true);
+}
+
 function initializeNewSession(profile = null, customPrompt = null) {
     currentSessionId = Date.now().toString();
     currentTranscription = '';
     conversationHistory = [];
     screenAnalysisHistory = [];
     groqConversationHistory = [];
-    currentProfile = profile;
-    currentCustomPrompt = customPrompt;
 
-    // Dynamically build and set currentSystemPrompt
     const prefs = getPreferences() || {};
-    const enabledTools = prefs.enabledTools || [];
-    const googleSearchEnabled = enabledTools.some(tool => tool.googleSearch);
-    let finalCustomPrompt = customPrompt || '';
-    if (prefs.cvText && prefs.cvText.trim()) {
-        finalCustomPrompt = `${finalCustomPrompt}\n\n[CV/Resume Context]:\n${prefs.cvText}`;
-    }
-    currentSystemPrompt = getSystemPrompt(profile, finalCustomPrompt, googleSearchEnabled);
+    currentProfile = profile || prefs.selectedProfile || 'interview';
+    currentCustomPrompt = customPrompt !== null && customPrompt !== undefined
+        ? customPrompt
+        : (prefs.customPrompt || '');
 
-    console.log('New conversation session started:', currentSessionId, 'profile:', profile);
+    // Recompute currentSystemPrompt with CV and active profile
+    getEffectiveSystemPrompt(true);
+
+    console.log('New conversation session started:', currentSessionId, 'profile:', currentProfile);
 
     // Save initial session with profile context
-    if (profile) {
+    if (currentProfile) {
         sendToRenderer('save-session-context', {
             sessionId: currentSessionId,
-            profile: profile,
-            customPrompt: customPrompt || '',
+            profile: currentProfile,
+            customPrompt: currentCustomPrompt || '',
         });
     }
 }
@@ -345,7 +370,7 @@ async function sendToGroq(transcription) {
                     },
                     body: JSON.stringify({
                         model: modelToUse,
-                        messages: [{ role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' }, ...groqConversationHistory],
+                        messages: [{ role: 'system', content: getEffectiveSystemPrompt() }, ...groqConversationHistory],
                         stream: true,
                         temperature: 0.1,
                         max_tokens: 1500,
@@ -426,7 +451,7 @@ async function sendToGroq(transcription) {
         const cleanedResponse = stripThinkingTags(fullText);
         const modelKey = modelToUse.split('/').pop();
 
-        const systemPromptChars = (currentSystemPrompt || 'You are a helpful assistant.').length;
+        const systemPromptChars = getEffectiveSystemPrompt().length;
         const historyChars = groqConversationHistory.reduce((sum, msg) => sum + (msg.content || '').length, 0);
         const inputChars = systemPromptChars + historyChars;
         const outputChars = cleanedResponse.length;
@@ -504,7 +529,7 @@ async function sendToGemma(transcription) {
         role: msg.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: msg.content }],
     }));
-    const systemPrompt = currentSystemPrompt || 'You are a helpful assistant.';
+    const systemPrompt = getEffectiveSystemPrompt();
 
     for (let i = 0; i < availableKeyEntries.length; i++) {
         const { key, index } = availableKeyEntries[i];
@@ -600,20 +625,12 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
     const enabledTools = await getEnabledTools();
     const googleSearchEnabled = enabledTools.some(tool => tool.googleSearch);
 
-    const prefs = getPreferences();
-    let finalCustomPrompt = customPrompt;
-    if (prefs.cvText && prefs.cvText.trim()) {
-        finalCustomPrompt = `${customPrompt}\n\n[CV/Resume Context]:\n${prefs.cvText}`;
-        console.log('Integrated CV Context, length:', prefs.cvText.length);
-    }
-
-    const systemPrompt = getSystemPrompt(profile, finalCustomPrompt, googleSearchEnabled);
-    currentSystemPrompt = systemPrompt; // Store for Groq
-
     // Initialize new conversation session only on first connect
     if (!isReconnect) {
         initializeNewSession(profile, customPrompt);
     }
+
+    const systemPrompt = getEffectiveSystemPrompt();
 
     try {
         const session = await client.live.connect({
@@ -911,57 +928,66 @@ async function initializeDeepgramSession(apiKey, customPrompt = '', profile = 'i
     deepgramApiKey = apiKey;
     isUserClosing = false;
 
-    // Use prompts module to get current instruction
-    const googleSearchEnabled = false;
-    const prefs = getPreferences();
-    let finalCustomPrompt = customPrompt;
-    if (prefs.cvText && prefs.cvText.trim()) {
-        finalCustomPrompt = `${customPrompt}\n\n[CV/Resume Context]:\n${prefs.cvText}`;
-        console.log('Integrated CV Context, length:', prefs.cvText.length);
-    }
-    const systemPrompt = getSystemPrompt(profile, finalCustomPrompt, googleSearchEnabled);
-    currentSystemPrompt = systemPrompt;
-
-    initializeNewSession(profile, finalCustomPrompt);
+    initializeNewSession(profile, customPrompt);
     return connectDeepgramWebSocket(language);
 }
 
 const { helperManager } = require('./macOSHelperManager');
 
+function killExistingSystemAudioDump() {
+    return new Promise(resolve => {
+        const killProc = spawn('pkill', ['-f', 'SystemAudioDump'], {
+            stdio: 'ignore',
+        });
+        killProc.on('close', () => {
+            resolve();
+        });
+        killProc.on('error', () => {
+            resolve();
+        });
+    });
+}
+
 async function startMacOSAudioCapture(geminiSessionRef) {
     if (process.platform !== 'darwin') return false;
 
-    console.log('Starting macOS audio capture via native helper manager...');
     hasShownPermissionDialog = false;
 
-    // Initialize & connect to legitimate macOS helper service
-    await helperManager.initialize();
-    const success = await helperManager.startAudioCapture();
+    // Ensure any stale instances of SystemAudioDump are cleaned up
+    await killExistingSystemAudioDump();
 
-    if (!success) {
-        console.warn('Native helper IPC audio capture request returned false, attempting process launch...');
-        let systemAudioPath;
-        const { app } = require('electron');
-        const path = require('path');
-        if (app.isPackaged) {
-            systemAudioPath = path.join(process.resourcesPath, 'SystemAudioDump');
-        } else {
-            systemAudioPath = path.join(__dirname, '../assets', 'SystemAudioDump');
-        }
+    // Notify helper manager for status tracking
+    try {
+        await helperManager.initialize();
+        await helperManager.startAudioCapture();
+    } catch (err) {
+        console.warn('Native helper IPC audio capture request error:', err);
+    }
 
-        if (fs.existsSync(systemAudioPath)) {
-            const spawnOptions = { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env } };
-            systemAudioProc = spawn(systemAudioPath, [], spawnOptions);
-            if (systemAudioProc && systemAudioProc.pid) {
-                console.log('Fallback audio capture started with PID:', systemAudioProc.pid);
-                setupAudioProcListeners(systemAudioProc, geminiSessionRef);
-                return true;
-            }
-        }
+    console.log('Starting macOS audio capture with SystemAudioDump...');
+    let systemAudioPath;
+    const { app } = require('electron');
+    const path = require('path');
+    if (app.isPackaged) {
+        systemAudioPath = path.join(process.resourcesPath, 'SystemAudioDump');
+    } else {
+        systemAudioPath = path.join(__dirname, '../assets', 'SystemAudioDump');
+    }
+
+    if (!fs.existsSync(systemAudioPath)) {
+        console.error('SystemAudioDump binary not found at:', systemAudioPath);
         return false;
     }
 
-    return true;
+    const spawnOptions = { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env } };
+    systemAudioProc = spawn(systemAudioPath, [], spawnOptions);
+    if (systemAudioProc && systemAudioProc.pid) {
+        console.log('Audio capture started with PID:', systemAudioProc.pid);
+        setupAudioProcListeners(systemAudioProc, geminiSessionRef);
+        return true;
+    }
+
+    return false;
 }
 
 function setupAudioProcListeners(proc, geminiSessionRef) {
@@ -1072,7 +1098,7 @@ async function sendImageToGroq(base64Data, prompt) {
             body: JSON.stringify({
                 model: 'meta-llama/llama-4-scout-17b-16e-instruct',
                 messages: [
-                    { role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' },
+                    { role: 'system', content: getEffectiveSystemPrompt() },
                     {
                         role: 'user',
                         content: [
@@ -1174,7 +1200,7 @@ async function sendToOpenRouterHttp(prompt, base64Data = null) {
         sendToRenderer('update-status', `OpenRouter (${modelToUse.split('/')[1] || modelToUse})...`);
 
         try {
-            const messages = [{ role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' }];
+            const messages = [{ role: 'system', content: getEffectiveSystemPrompt() }];
 
             if (base64Data) {
                 messages.push({
@@ -1295,7 +1321,7 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
                 model: model,
                 contents: contents,
                 config: {
-                    systemInstruction: currentSystemPrompt || 'You are a helpful assistant.',
+                    systemInstruction: getEffectiveSystemPrompt(),
                     temperature: 0.2,
                 },
             });
@@ -1787,4 +1813,6 @@ module.exports = {
     sendImageToGeminiHttp,
     setupGeminiIpcHandlers,
     formatSpeakerResults,
+    getEffectiveSystemPrompt,
+    refreshSystemPrompt,
 };

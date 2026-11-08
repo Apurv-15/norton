@@ -682,6 +682,13 @@ export class AssistantView extends LitElement {
         if (window.captureManualScreenshot) {
             this.isAnalyzing = true;
             this._responseCountWhenStarted = this.responses.length;
+            if (this._analyzeTimeout) clearTimeout(this._analyzeTimeout);
+            this._analyzeTimeout = setTimeout(() => {
+                if (this.isAnalyzing) {
+                    console.warn('Screen analysis timed out after 30s');
+                    this.isAnalyzing = false;
+                }
+            }, 30000);
             window.captureManualScreenshot();
         }
     }
@@ -853,6 +860,10 @@ export class AssistantView extends LitElement {
 
         if (changedProperties.has('responses') && this.isAnalyzing) {
             if (this.responses.length > this._responseCountWhenStarted) {
+                if (this._analyzeTimeout) {
+                    clearTimeout(this._analyzeTimeout);
+                    this._analyzeTimeout = null;
+                }
                 this.isAnalyzing = false;
             }
         }

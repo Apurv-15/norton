@@ -255,16 +255,18 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
 
     try {
         if (isMacOS) {
-            // On macOS, use SystemAudioDump for audio and native desktopCapturer for screenshots
-            if (appMode !== 'coding') {
+            // On macOS, start system audio capture only when speaker audio is requested
+            if (appMode !== 'coding' && (audioMode === 'speaker_only' || audioMode === 'both')) {
                 console.log('Starting macOS capture with SystemAudioDump...');
                 // Start macOS audio capture
                 const audioResult = await ipcRenderer.invoke('start-macos-audio');
                 if (!audioResult.success) {
                     throw new Error('Failed to start macOS audio capture: ' + audioResult.error);
                 }
-            } else {
+            } else if (appMode === 'coding') {
                 console.log('Starting macOS capture in Coding Mode (audio disabled)...');
+            } else {
+                console.log('Starting macOS capture in Mic-only mode (system audio disabled)...');
             }
 
             console.log('macOS stealth capture started (no screen share menu bar indicator)');
@@ -653,22 +655,16 @@ async function captureManualScreenshot(imageQuality = null) {
     console.log('Manual screenshot triggered');
     const quality = imageQuality || currentImageQuality;
 
-    if (!mediaStream) {
-        console.error('No media stream available');
-        _screenshotInFlight = false;
-        return;
-    }
-
     try {
         console.log('Triggering silent screen OCR...');
         cheatingDaddy.setStatus('Analyzing Screen...');
 
         const ocrResult = await ipcRenderer.invoke('capture-screen-ocr');
-        if (ocrResult.success && ocrResult.text) {
+        if (ocrResult.success && ocrResult.text && ocrResult.text.trim().length > 0) {
             console.log('OCR text extracted successfully:', ocrResult.text.length, 'characters');
 
             // Format prompt with OCR text context
-            const fullPrompt = `${getManualScreenshotPrompt()}\n\n[Extracted Screen Text Context]:\n${ocrResult.text}`;
+            const fullPrompt = `${getManualScreenshotPrompt()}\n\n[Extracted Screen Text Context]:\n${ocrResult.text.trim()}`;
 
             const textResult = await sendTextMessage(fullPrompt);
             _screenshotInFlight = false;
@@ -680,106 +676,142 @@ async function captureManualScreenshot(imageQuality = null) {
                 cheatingDaddy.addNewResponse(`Error submitting text prompt: ${textResult.error}`);
             }
         } else {
-            console.warn('OCR returned empty text, falling back to legacy screen share capture...', ocrResult.error || '');
+            console.warn('OCR returned empty text or failed, falling back to screen capture...', ocrResult.error || '');
 
-            // Lazy init of video element
-            if (!hiddenVideo) {
-                hiddenVideo = document.createElement('video');
-                hiddenVideo.srcObject = mediaStream;
-                hiddenVideo.muted = true;
-                hiddenVideo.playsInline = true;
-                await hiddenVideo.play();
+            // Fallback 1: Stealth / Native screen capture (works on macOS without web mediaStream, and as system fallback)
+            let sentNative = false;
+            try {
+                const nativeRes = await ipcRenderer.invoke('capture-screen-native', quality);
+                if (nativeRes.success && nativeRes.data) {
+                    console.log('Sending native captured screen to vision model...');
+                    const result = await ipcRenderer.invoke('send-image-content', {
+                        data: nativeRes.data,
+                        prompt: getManualScreenshotPrompt(),
+                    });
+                    _screenshotInFlight = false;
+                    sentNative = true;
 
-                await new Promise(resolve => {
-                    if (hiddenVideo.readyState >= 2) return resolve();
-                    hiddenVideo.onloadedmetadata = () => resolve();
-                });
-
-                // Lazy init of canvas based on video dimensions
-                offscreenCanvas = document.createElement('canvas');
-                offscreenCanvas.width = hiddenVideo.videoWidth;
-                offscreenCanvas.height = hiddenVideo.videoHeight;
-                offscreenContext = offscreenCanvas.getContext('2d');
+                    if (result.success) {
+                        console.log(`Image response completed from ${result.model || 'provider'}`);
+                    } else {
+                        console.error('Failed to get image response:', result.error);
+                        cheatingDaddy.addNewResponse(`Error: ${result.error}`);
+                    }
+                }
+            } catch (nativeErr) {
+                console.warn('Native screenshot capture failed, checking mediaStream fallback:', nativeErr);
             }
 
-            // Check if video is ready
-            if (hiddenVideo.readyState < 2) {
-                console.warn('Video not ready yet, skipping screenshot');
-                _screenshotInFlight = false;
+            if (sentNative) {
                 return;
             }
 
-            // Downscale to max 1280px wide for faster transfer
-            const MAX_WIDTH = 1280;
-            const srcW = hiddenVideo.videoWidth;
-            const srcH = hiddenVideo.videoHeight;
-            let destW = srcW;
-            let destH = srcH;
-            if (srcW > MAX_WIDTH) {
-                destW = MAX_WIDTH;
-                destH = Math.round(srcH * (MAX_WIDTH / srcW));
-            }
-            offscreenCanvas.width = destW;
-            offscreenCanvas.height = destH;
-            offscreenContext.drawImage(hiddenVideo, 0, 0, destW, destH);
+            // Fallback 2: Browser mediaStream if active (Linux/Windows)
+            if (mediaStream) {
+                // Lazy init of video element
+                if (!hiddenVideo) {
+                    hiddenVideo = document.createElement('video');
+                    hiddenVideo.srcObject = mediaStream;
+                    hiddenVideo.muted = true;
+                    hiddenVideo.playsInline = true;
+                    await hiddenVideo.play();
 
-            let qualityValue;
-            switch (quality) {
-                case 'high':
-                    qualityValue = 0.85;
-                    break;
-                case 'medium':
-                    qualityValue = 0.6;
-                    break;
-                case 'low':
-                    qualityValue = 0.4;
-                    break;
-                default:
-                    qualityValue = 0.6;
-            }
+                    await new Promise(resolve => {
+                        if (hiddenVideo.readyState >= 2) return resolve();
+                        hiddenVideo.onloadedmetadata = () => resolve();
+                    });
 
-            offscreenCanvas.toBlob(
-                async blob => {
-                    if (!blob) {
-                        console.error('Failed to create blob from canvas');
-                        _screenshotInFlight = false;
-                        return;
-                    }
+                    // Lazy init of canvas based on video dimensions
+                    offscreenCanvas = document.createElement('canvas');
+                    offscreenCanvas.width = hiddenVideo.videoWidth;
+                    offscreenCanvas.height = hiddenVideo.videoHeight;
+                    offscreenContext = offscreenCanvas.getContext('2d');
+                }
 
-                    const reader = new FileReader();
-                    reader.onloadend = async () => {
-                        const base64data = reader.result.split(',')[1];
+                // Check if video is ready
+                if (hiddenVideo.readyState < 2) {
+                    console.warn('Video not ready yet, skipping screenshot');
+                    _screenshotInFlight = false;
+                    return;
+                }
 
-                        if (!base64data || base64data.length < 100) {
-                            console.error('Invalid base64 data generated');
+                // Downscale to max 1280px wide for faster transfer
+                const MAX_WIDTH = 1280;
+                const srcW = hiddenVideo.videoWidth;
+                const srcH = hiddenVideo.videoHeight;
+                let destW = srcW;
+                let destH = srcH;
+                if (srcW > MAX_WIDTH) {
+                    destW = MAX_WIDTH;
+                    destH = Math.round(srcH * (MAX_WIDTH / srcW));
+                }
+                offscreenCanvas.width = destW;
+                offscreenCanvas.height = destH;
+                offscreenContext.drawImage(hiddenVideo, 0, 0, destW, destH);
+
+                let qualityValue;
+                switch (quality) {
+                    case 'high':
+                        qualityValue = 0.85;
+                        break;
+                    case 'medium':
+                        qualityValue = 0.6;
+                        break;
+                    case 'low':
+                        qualityValue = 0.4;
+                        break;
+                    default:
+                        qualityValue = 0.6;
+                }
+
+                offscreenCanvas.toBlob(
+                    async blob => {
+                        if (!blob) {
+                            console.error('Failed to create blob from canvas');
                             _screenshotInFlight = false;
                             return;
                         }
 
-                        console.log(`Sending image: ${destW}x${destH}, ~${Math.round(base64data.length / 1024)}KB`);
+                        const reader = new FileReader();
+                        reader.onloadend = async () => {
+                            const base64data = reader.result.split(',')[1];
 
-                        const result = await ipcRenderer.invoke('send-image-content', {
-                            data: base64data,
-                            prompt: getManualScreenshotPrompt(),
-                        });
-                        _screenshotInFlight = false;
+                            if (!base64data || base64data.length < 100) {
+                                console.error('Invalid base64 data generated');
+                                _screenshotInFlight = false;
+                                return;
+                            }
 
-                        if (result.success) {
-                            console.log(`Image response completed from ${result.model}`);
-                        } else {
-                            console.error('Failed to get image response:', result.error);
-                            cheatingDaddy.addNewResponse(`Error: ${result.error}`);
-                        }
-                    };
-                    reader.readAsDataURL(blob);
-                },
-                'image/jpeg',
-                qualityValue
-            );
+                            console.log(`Sending image: ${destW}x${destH}, ~${Math.round(base64data.length / 1024)}KB`);
+
+                            const result = await ipcRenderer.invoke('send-image-content', {
+                                data: base64data,
+                                prompt: getManualScreenshotPrompt(),
+                            });
+                            _screenshotInFlight = false;
+
+                            if (result.success) {
+                                console.log(`Image response completed from ${result.model}`);
+                            } else {
+                                console.error('Failed to get image response:', result.error);
+                                cheatingDaddy.addNewResponse(`Error: ${result.error}`);
+                            }
+                        };
+                        reader.readAsDataURL(blob);
+                    },
+                    'image/jpeg',
+                    qualityValue
+                );
+            } else {
+                console.error('No screenshot mechanism succeeded');
+                _screenshotInFlight = false;
+                cheatingDaddy.addNewResponse('Failed to capture screen: No screen capture source available');
+            }
         }
     } catch (ocrError) {
-        console.error('Error during silent screen OCR capture:', ocrError);
+        console.error('Error during screen capture / analysis:', ocrError);
         _screenshotInFlight = false;
+        cheatingDaddy.addNewResponse(`Screen analysis error: ${ocrError.message || ocrError}`);
     }
 }
 
