@@ -48,7 +48,7 @@ const DEFAULT_PREFERENCES = {
 const DEFAULT_KEYBINDS = null; // null means use system defaults
 
 const DEFAULT_LIMITS = {
-    data: [], // Array of { date: 'YYYY-MM-DD', flash: { count }, flashLite: { count }, groq: { 'llama-3.3-70b-versatile': { chars, limit }, 'llama-3.1-8b-instant': { chars, limit }, 'mixtral-8x7b-32768': { chars, limit }, 'gemma2-9b-it': { chars, limit } }, gemini: { 'gemini-2.5-flash-lite': { chars } } }
+    data: [], // Array of { date: 'YYYY-MM-DD', flash: { count }, flashLite: { count }, groq: { 'qwen/qwen3.8-27b': { chars, limit }, 'openai/gpt-oss-120b': { chars, limit }, 'openai/gpt-oss-20b': { chars, limit } }, gemini: { 'gemini-3.5-flash-lite': { chars } } }
 };
 
 // Get the config directory path based on OS
@@ -471,13 +471,12 @@ function getTodayLimits() {
             flash: { count: 0 },
             flashLite: { count: 0 },
             groq: {
-                'llama-3.3-70b-versatile': { chars: 0, limit: 1000000 },
-                'llama-3.1-8b-instant': { chars: 0, limit: 1000000 },
-                'mixtral-8x7b-32768': { chars: 0, limit: 1000000 },
-                'gemma2-9b-it': { chars: 0, limit: 1000000 },
+                'qwen/qwen3.8-27b': { chars: 0, limit: 1000000 },
+                'openai/gpt-oss-120b': { chars: 0, limit: 1000000 },
+                'openai/gpt-oss-20b': { chars: 0, limit: 1000000 },
             },
             gemini: {
-                'gemini-2.5-flash-lite': { chars: 0 },
+                'gemini-3.5-flash-lite': { chars: 0 },
             },
         };
         limits.data.push(todayEntry);
@@ -499,18 +498,16 @@ function getTodayLimits() {
         // Ensure groq field exists and has all models
         if (!todayEntry.groq) {
             todayEntry.groq = {
-                'llama-3.3-70b-versatile': { chars: 0, limit: 1000000 },
-                'llama-3.1-8b-instant': { chars: 0, limit: 1000000 },
-                'mixtral-8x7b-32768': { chars: 0, limit: 1000000 },
-                'gemma2-9b-it': { chars: 0, limit: 1000000 },
+                'qwen/qwen3.8-27b': { chars: 0, limit: 1000000 },
+                'openai/gpt-oss-120b': { chars: 0, limit: 1000000 },
+                'openai/gpt-oss-20b': { chars: 0, limit: 1000000 },
             };
             modified = true;
         } else {
             const expectedGroqModels = {
-                'llama-3.3-70b-versatile': 1000000,
-                'llama-3.1-8b-instant': 1000000,
-                'mixtral-8x7b-32768': 1000000,
-                'gemma2-9b-it': 1000000,
+                'qwen/qwen3.8-27b': 1000000,
+                'openai/gpt-oss-120b': 1000000,
+                'openai/gpt-oss-20b': 1000000,
             };
             // Clean up deprecated groq keys
             for (const key of Object.keys(todayEntry.groq)) {
@@ -530,12 +527,12 @@ function getTodayLimits() {
         // Ensure gemini field exists and has gemini-2.5-flash-lite, and clean up any gemma keys
         if (!todayEntry.gemini) {
             todayEntry.gemini = {
-                'gemini-2.5-flash-lite': { chars: 0 },
+                'gemini-3.5-flash-lite': { chars: 0 },
             };
             modified = true;
         } else {
-            if (!todayEntry.gemini['gemini-2.5-flash-lite']) {
-                todayEntry.gemini['gemini-2.5-flash-lite'] = { chars: 0 };
+            if (!todayEntry.gemini['gemini-3.5-flash-lite']) {
+                todayEntry.gemini['gemini-3.5-flash-lite'] = { chars: 0 };
                 modified = true;
             }
             // Clean up deprecated gemma keys
@@ -563,7 +560,7 @@ function incrementLimitCount(model) {
     // Increment the appropriate model count
     if (model === 'gemini-2.5-flash') {
         todayEntry.flash.count++;
-    } else if (model === 'gemini-2.5-flash-lite') {
+    } else if (model === 'gemini-3.5-flash-lite') {
         todayEntry.flashLite.count++;
     }
 
@@ -594,7 +591,7 @@ function getAvailableModel() {
     if (todayLimits.flash.count < 20) {
         return 'gemini-2.5-flash';
     } else if (todayLimits.flashLite.count < 20) {
-        return 'gemini-2.5-flash-lite';
+        return 'gemini-3.5-flash-lite';
     }
 
     return 'gemini-2.5-flash'; // Default to flash for paid API users
@@ -607,9 +604,7 @@ function getModelForToday() {
     const availableActiveModels = [
         'qwen/qwen3.8-27b',
         'openai/gpt-oss-120b',
-        'openai/gpt-oss-20b',
-        'llama-3.3-70b-versatile',
-        'llama-3.1-8b-instant'
+        'openai/gpt-oss-20b'
     ];
 
     for (const m of availableActiveModels) {
