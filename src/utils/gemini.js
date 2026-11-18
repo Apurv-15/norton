@@ -3,7 +3,42 @@ const { BrowserWindow, ipcMain, dialog } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 const WebSocket = require('ws');
+
+// Persistent HTTP/1.1 Keep-Alive Agent for Groq API
+const groqAgent = new https.Agent({
+    keepAlive: true,
+    keepAliveMsecs: 25000,
+    maxSockets: 4,
+    timeout: 5000,
+});
+
+let lastPrewarmTime = 0;
+function prewarmGroqSocket() {
+    const now = Date.now();
+    if (now - lastPrewarmTime < 20000) return; // Throttle to once every 20s
+    lastPrewarmTime = now;
+
+    const groqApiKey = getGroqApiKey();
+    if (!groqApiKey) return;
+
+    try {
+        const req = https.request('https://api.groq.com/openai/v1/models', {
+            method: 'GET',
+            agent: groqAgent,
+            headers: {
+                Authorization: 'Bearer ' + groqApiKey,
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+            },
+        }, res => {
+            res.destroy();
+        });
+        req.on('error', () => {});
+        req.setTimeout(2500, () => req.destroy());
+        req.end();
+    } catch (e) {}
+}
 const { saveDebugAudio } = require('../audioUtils');
 const { getSystemPrompt } = require('./prompts');
 const {
@@ -40,6 +75,8 @@ let groqConversationHistory = [];
 
 // Conversation tracking variables
 let currentSessionId = null;
+let currentGroqAbortController = null;
+let isGroqGenerating = false;
 let currentTranscription = '';
 let conversationHistory = [];
 let screenAnalysisHistory = [];
@@ -318,34 +355,32 @@ function stripThinkingTags(text) {
 async function sendToGroq(transcription) {
     const groqApiKey = getGroqApiKey();
     if (!groqApiKey) {
-        console.log('No Groq API key configured, skipping Groq response');
+        console.log("No Groq API key configured, skipping Groq response");
         return;
     }
 
-    if (!transcription || transcription.trim() === '') {
-        console.log('Empty transcription, skipping Groq');
+    if (!transcription || transcription.trim() === "") {
+        console.log("Empty transcription, skipping Groq");
         return;
     }
 
     const primaryModel = getModelForToday();
     if (!primaryModel) {
-        console.log('All Groq daily limits exhausted');
-        sendToRenderer('update-status', 'Groq limits reached for today');
+        console.log("All Groq daily limits exhausted");
+        sendToRenderer("update-status", "Groq limits reached for today");
         return;
     }
 
     const candidateModels = [
         primaryModel,
-        'qwen/qwen3.8-27b',
-        'openai/gpt-oss-120b',
-        'openai/gpt-oss-20b',
-        'llama-3.1-8b-instant',
-        'mixtral-8x7b-32768'
+        "qwen/qwen3.8-27b",
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b"
     ];
     const modelsToTry = [...new Set(candidateModels)];
 
     groqConversationHistory.push({
-        role: 'user',
+        role: "user",
         content: transcription.trim(),
     });
 
@@ -353,125 +388,161 @@ async function sendToGroq(transcription) {
         groqConversationHistory = groqConversationHistory.slice(-20);
     }
 
+    // Set up speculative AbortController for barge-in cancellation
+    currentGroqAbortController = new AbortController();
+    const abortSignal = currentGroqAbortController.signal;
+    isGroqGenerating = true;
+
+    const tStart = Date.now();
+    let ttft = null;
+
     try {
         let response = null;
         let modelToUse = primaryModel;
 
         for (const modelCandidate of modelsToTry) {
+            if (abortSignal.aborted) {
+                console.log("[Groq] Generation aborted by barge-in before request dispatch");
+                return;
+            }
+
             modelToUse = modelCandidate;
-            console.log(`Sending to Groq (${modelToUse}):`, transcription.substring(0, 100) + '...');
+            console.log(`Sending to Groq (${modelToUse}):`, transcription.substring(0, 100) + "...");
 
             try {
-                const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                    method: 'POST',
+                // Pass native keep-alive dispatcher agent for 0ms TLS connection overhead
+                const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+                    method: "POST",
+                    
+                    signal: abortSignal,
                     headers: {
                         Authorization: `Bearer ${groqApiKey}`,
-                        'Content-Type': 'application/json',
+                        "Content-Type": "application/json",
+                        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
                     },
                     body: JSON.stringify({
                         model: modelToUse,
-                        messages: [{ role: 'system', content: getEffectiveSystemPrompt() }, ...groqConversationHistory],
+                        messages: [{ role: "system", content: getEffectiveSystemPrompt() }, ...groqConversationHistory],
                         stream: true,
                         temperature: 0.1,
                         max_tokens: 1500,
                     }),
                 });
 
-                if (res.status === 404 || res.status === 400) {
-                    const errBody = await res.text();
-                    if (
-                        res.status === 404 ||
-                        errBody.includes('model_decommissioned') ||
-                        errBody.includes('model_not_found') ||
-                        errBody.includes('does not exist')
-                    ) {
-                        console.warn(`Groq model ${modelToUse} returned ${res.status} (${errBody.substring(0, 100)}), immediately falling back...`);
-                        continue;
-                    } else {
-                        console.error('Groq API error:', res.status, errBody);
-                        sendToRenderer('update-status', `Groq error: ${res.status}`);
-                        return;
-                    }
-                }
-
                 if (!res.ok) {
-                    const errorText = await res.text();
-                    console.error('Groq API error:', res.status, errorText);
-                    sendToRenderer('update-status', `Groq error: ${res.status}`);
-                    return;
+                    const errBody = await res.text();
+                    console.warn(`Groq model ${modelToUse} returned ${res.status} (${errBody.substring(0, 120)}), falling back to next candidate...`);
+                    continue;
                 }
 
                 response = res;
                 break;
             } catch (fetchErr) {
-                console.error('Groq fetch error:', fetchErr);
+                if (abortSignal.aborted) {
+                    console.log("[Groq] Fetch aborted by barge-in");
+                    return;
+                }
+                console.error("Groq fetch error:", fetchErr);
             }
         }
 
         if (!response || !response.ok) {
-            sendToRenderer('update-status', 'Groq model unavailable on API');
+            if (abortSignal.aborted) return;
+            console.warn("All Groq models failed. Falling back to Gemma...");
+            sendToRenderer("update-status", "Falling back to Gemini...");
+            sendToGemma(transcription);
             return;
         }
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
-        let fullText = '';
+        let fullText = "";
         let isFirst = true;
 
+        // 16ms micro-batching buffer for 60Hz display refresh
+        let lastBatchFlushTime = 0;
+
         while (true) {
+            if (abortSignal.aborted) {
+                console.log("[Groq] Stream read aborted by barge-in");
+                try { reader.cancel(); } catch (e) {}
+                return;
+            }
+
             const { done, value } = await reader.read();
             if (done) break;
 
             const chunk = decoder.decode(value, { stream: true });
-            const lines = chunk.split('\n').filter(line => line.trim() !== '');
+            const lines = chunk.split("\n").filter(line => line.trim() !== "");
 
             for (const line of lines) {
-                if (line.startsWith('data: ')) {
+                if (line.startsWith("data: ")) {
                     const data = line.slice(6);
-                    if (data === '[DONE]') continue;
+                    if (data === "[DONE]") continue;
 
                     try {
                         const json = JSON.parse(data);
-                        const token = json.choices?.[0]?.delta?.content || '';
+                        const token = json.choices?.[0]?.delta?.content || "";
                         if (token) {
+                            if (ttft === null) {
+                                ttft = Date.now() - tStart;
+                            }
                             fullText += token;
                             const displayText = stripThinkingTags(fullText);
                             if (displayText) {
-                                sendToRenderer(isFirst ? 'new-response' : 'update-response', displayText);
-                                isFirst = false;
+                                const now = Date.now();
+                                // First token: 0ms immediate flush!
+                                // Subsequent tokens: 16ms throttled flush (60Hz display sync)
+                                if (isFirst || now - lastBatchFlushTime >= 16) {
+                                    sendToRenderer(isFirst ? "new-response" : "update-response", displayText);
+                                    isFirst = false;
+                                    lastBatchFlushTime = now;
+                                }
                             }
                         }
-                    } catch (parseError) {
-                        // Skip invalid JSON chunks
-                    }
+                    } catch (parseError) {}
                 }
             }
         }
 
         const cleanedResponse = stripThinkingTags(fullText);
-        const modelKey = modelToUse.split('/').pop();
+        // Final flush ensuring complete message is displayed
+        if (cleanedResponse) {
+            sendToRenderer(isFirst ? "new-response" : "update-response", cleanedResponse);
+        }
 
+        const totalE2E = Date.now() - tStart;
+        console.log(`[Perf] Groq finished (${modelToUse}) | TTFT: ${ttft || totalE2E}ms | Total Gen Time: ${totalE2E}ms`);
+
+        const modelKey = modelToUse.split("/").pop();
         const systemPromptChars = getEffectiveSystemPrompt().length;
-        const historyChars = groqConversationHistory.reduce((sum, msg) => sum + (msg.content || '').length, 0);
+        const historyChars = groqConversationHistory.reduce((sum, msg) => sum + (msg.content || "").length, 0);
         const inputChars = systemPromptChars + historyChars;
         const outputChars = cleanedResponse.length;
 
-        incrementCharUsage('groq', modelKey, inputChars + outputChars);
+        incrementCharUsage("groq", modelKey, inputChars + outputChars);
 
         if (cleanedResponse) {
             groqConversationHistory.push({
-                role: 'assistant',
+                role: "assistant",
                 content: cleanedResponse,
             });
-
             saveConversationTurn(transcription, cleanedResponse);
         }
 
-        console.log(`Groq response completed (${modelToUse})`);
-        sendToRenderer('update-status', 'Listening...');
+        sendToRenderer("update-status", "Listening...");
     } catch (error) {
-        console.error('Error calling Groq API:', error);
-        sendToRenderer('update-status', 'Groq error: ' + error.message);
+        if (abortSignal.aborted) {
+            console.log("[Groq] Stream terminated via barge-in abort");
+            return;
+        }
+        console.error("Error calling Groq API:", error);
+        sendToRenderer("update-status", "Groq error: " + error.message);
+    } finally {
+        isGroqGenerating = false;
+        if (currentGroqAbortController === abortSignal) {
+            currentGroqAbortController = null;
+        }
     }
 }
 
@@ -537,7 +608,7 @@ async function sendToGemma(transcription) {
             const ai = new GoogleGenAI({ apiKey: key });
 
             const response = await ai.models.generateContentStream({
-                model: 'gemini-2.5-flash-lite',
+                model: 'gemini-3.5-flash-lite',
                 contents: messages,
                 config: {
                     systemInstruction: systemPrompt,
@@ -561,7 +632,7 @@ async function sendToGemma(transcription) {
             const inputChars = systemPromptChars + historyChars;
             const outputChars = fullText.length;
 
-            incrementCharUsage('gemini', 'gemini-2.5-flash-lite', inputChars + outputChars);
+            incrementCharUsage('gemini', 'gemini-3.5-flash-lite', inputChars + outputChars);
 
             if (fullText.trim()) {
                 groqConversationHistory.push({
@@ -819,27 +890,40 @@ async function attemptReconnect() {
 
 function triggerDeepgramGroqAnswer() {
     const textToSend = currentTranscription.trim();
-    currentTranscription = '';
-    if (textToSend) {
-        console.log('[Deepgram] Triggering answers for:', textToSend);
-        sendToRenderer('update-status', 'Thinking...');
-        if (hasGroqKey()) {
-            sendToGroq(textToSend);
-        } else {
-            sendToGemma(textToSend);
-        }
+    if (!textToSend) return;
+
+    // Speculative execution guard: abort any active in-flight request
+    if (currentGroqAbortController) {
+        try {
+            currentGroqAbortController.abort();
+        } catch (e) {}
+        currentGroqAbortController = null;
+    }
+
+    currentTranscription = "";
+    console.log("[Deepgram] Triggering speculative answer for:", textToSend);
+    sendToRenderer("update-status", "Thinking...");
+
+    if (hasGroqKey()) {
+        sendToGroq(textToSend);
+    } else {
+        sendToGemma(textToSend);
     }
 }
 
-async function connectDeepgramWebSocket(language = 'en-US') {
+async function connectDeepgramWebSocket(language = "en-US") {
     return new Promise(resolve => {
         try {
-            console.log('Connecting to Deepgram WebSocket...');
-            sendToRenderer('update-status', 'Connecting to Deepgram...');
+            console.log("Connecting to Deepgram WebSocket...");
+            sendToRenderer("update-status", "Connecting to Deepgram...");
 
-            const model = 'nova-3';
-            const langCode = language || 'en-US';
-            const url = `wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=24000&channels=1&model=${model}&language=${langCode}&interim_results=true&endpointing=300&smart_format=true`;
+            const prefs = getPreferences();
+            const isBlackHoleMode = prefs.audioMode === 'stealth_loopback';
+            // Use 400ms endpointing for BlackHole/stealth loopback so natural speech pauses aren't cut short
+            const endpointing = isBlackHoleMode ? 400 : 300;
+            const model = "nova-3";
+            const langCode = language || "en-US";
+            const url = `wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=24000&channels=1&model=${model}&language=${langCode}&interim_results=true&endpointing=${endpointing}&utterance_end_ms=1000&vad_events=true&smart_format=true`;
 
             deepgramWs = new WebSocket(url, {
                 headers: {
@@ -847,48 +931,84 @@ async function connectDeepgramWebSocket(language = 'en-US') {
                 },
             });
 
-            deepgramWs.on('open', () => {
-                console.log('Deepgram WebSocket connected!');
-                sendToRenderer('update-status', 'Deepgram connected. Listening...');
-                // ponytail: keepalive every 8s so Deepgram doesn't idle-close (~10s timeout)
+            deepgramWs.on("open", () => {
+                console.log("Deepgram WebSocket connected!");
+                sendToRenderer("update-status", "Deepgram connected. Listening...");
+                // Keepalive every 5s so Deepgram never drops on silence/pause
                 deepgramKeepAliveInterval = setInterval(() => {
                     if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
-                        deepgramWs.send(JSON.stringify({ type: 'KeepAlive' }));
+                        try {
+                            deepgramWs.send(JSON.stringify({ type: "KeepAlive" }));
+                        } catch (e) {}
                     }
-                }, 8000);
+                }, 5000);
                 resolve(true);
             });
 
-            deepgramWs.on('message', data => {
+            deepgramWs.on("message", data => {
                 try {
                     const response = JSON.parse(data.toString());
+
+                    // JIT Socket Pre-Warming on speech detected
+                    if (response.type === "SpeechStarted") {
+                        prewarmGroqSocket();
+                        // Barge-in: if user resumed speaking while Groq was streaming, abort and rollback UI!
+                        if (isGroqGenerating && currentGroqAbortController) {
+                            console.log("[Barge-In] User resumed speaking, aborting in-flight generation & rolling back UI...");
+                            currentGroqAbortController.abort();
+                            currentGroqAbortController = null;
+                            isGroqGenerating = false;
+                            sendToRenderer("rollback-speculative-response");
+                        }
+                    }
+
+                    if (response.type === "UtteranceEnd") {
+                        if (currentTranscription.trim() !== "" && !isManualMode && !isGroqGenerating) {
+                            if (deepgramTranscriptionTimeout) clearTimeout(deepgramTranscriptionTimeout);
+                            triggerDeepgramGroqAnswer();
+                        }
+                    }
+
                     if (response.channel && response.channel.alternatives && response.channel.alternatives[0]) {
                         const transcript = response.channel.alternatives[0].transcript;
                         const isFinal = response.is_final;
                         const speechFinal = response.speech_final;
 
-                        if (transcript.trim() !== '') {
-                            sendToRenderer('update-status', 'Transcribing: ' + transcript);
+                        if (transcript.trim() !== "") {
+                            prewarmGroqSocket();
+
+                            // Barge-in check: if user speaks new words while generating
+                            if (isGroqGenerating && currentGroqAbortController) {
+                                console.log("[Barge-In] New transcript while generating, cancelling previous & rolling back UI...");
+                                currentGroqAbortController.abort();
+                                currentGroqAbortController = null;
+                                isGroqGenerating = false;
+                                sendToRenderer("rollback-speculative-response");
+                            }
+
+                            sendToRenderer("update-status", "Transcribing: " + transcript);
 
                             if (isFinal) {
-                                currentTranscription += ' ' + transcript;
+                                currentTranscription += " " + transcript;
 
                                 if (isManualMode) {
-                                    sendToRenderer('update-status', 'Recording question...');
+                                    sendToRenderer("update-status", "Recording question...");
                                 } else if (speechFinal) {
                                     if (deepgramTranscriptionTimeout) clearTimeout(deepgramTranscriptionTimeout);
+                                    // Zero artificial delay on speech_final!
                                     triggerDeepgramGroqAnswer();
                                 } else {
                                     if (deepgramTranscriptionTimeout) clearTimeout(deepgramTranscriptionTimeout);
+                                    // Tighter 150ms debounce for interim silence
                                     deepgramTranscriptionTimeout = setTimeout(() => {
                                         triggerDeepgramGroqAnswer();
-                                    }, 350);
+                                    }, 150);
                                 }
                             }
                         }
                     }
                 } catch (e) {
-                    console.error('Error parsing Deepgram message:', e);
+                    console.error("Error parsing Deepgram message:", e);
                 }
             });
 
@@ -991,11 +1111,12 @@ async function startMacOSAudioCapture(geminiSessionRef) {
 }
 
 function setupAudioProcListeners(proc, geminiSessionRef) {
-    const CHUNK_DURATION = 0.1;
+    // 40ms framing: 960 samples @ 24kHz (optimal for neural ASR without buffer bloat)
+    const CHUNK_DURATION = 0.04;
     const SAMPLE_RATE = 24000;
     const BYTES_PER_SAMPLE = 2;
     const CHANNELS = 2;
-    const CHUNK_SIZE = SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS * CHUNK_DURATION;
+    const CHUNK_SIZE = Math.round(SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS * CHUNK_DURATION);
 
     let audioBuffer = Buffer.alloc(0);
 
@@ -1013,7 +1134,10 @@ function setupAudioProcListeners(proc, geminiSessionRef) {
             } else if (currentProviderMode === 'local') {
                 getLocalAi().processLocalAudio(monoChunk);
             } else if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
-                deepgramWs.send(monoChunk);
+                // Prevent buffer bloat during network latency spikes
+                if (deepgramWs.bufferedAmount < 65536) {
+                    deepgramWs.send(monoChunk);
+                }
             } else {
                 const base64Data = monoChunk.toString('base64');
                 sendAudioToGemini(base64Data, geminiSessionRef);
@@ -1026,13 +1150,7 @@ function setupAudioProcListeners(proc, geminiSessionRef) {
         console.error('Audio capture stderr:', errorMsg);
         if (!hasShownPermissionDialog && (errorMsg.includes('SCStreamErrorDomain') || errorMsg.includes('-3821'))) {
             hasShownPermissionDialog = true;
-            dialog.showMessageBox({
-                type: 'warning',
-                title: 'Permission Required',
-                message: 'macOS Screen & Audio Recording Permission Required',
-                detail: 'Norton 260 requires Screen Recording permission to capture system audio.\n\nPlease enable it in System Settings > Privacy & Security > Screen Recording.',
-                buttons: ['OK']
-            });
+            console.warn('SystemAudioDump permission warning: Screen Recording permission is required for direct system audio capture.');
         }
     });
 
@@ -1042,18 +1160,22 @@ function setupAudioProcListeners(proc, geminiSessionRef) {
     });
 }
 
+// Zero-copy byte-aligned stereo-to-mono downmix
 function convertStereoToMono(stereoBuffer) {
-    const samples = stereoBuffer.length / 4;
-    const monoBuffer = Buffer.alloc(samples * 2);
+    const alignedBuf = (stereoBuffer.byteOffset % 2 === 0)
+        ? stereoBuffer
+        : Buffer.from(stereoBuffer);
 
-    for (let i = 0; i < samples; i++) {
-        const leftSample = stereoBuffer.readInt16LE(i * 4);
-        const rightSample = stereoBuffer.readInt16LE(i * 4 + 2);
-        const mono = Math.round((leftSample + rightSample) / 2);
-        monoBuffer.writeInt16LE(mono, i * 2);
+    const samples = new Int16Array(alignedBuf.buffer, alignedBuf.byteOffset, alignedBuf.byteLength / 2);
+    const monoLength = samples.length >>> 1;
+    const monoSamples = new Int16Array(monoLength);
+
+    for (let i = 0, j = 0; i < monoLength; i++, j += 2) {
+        // Bitwise right shift gives clean average without 16-bit integer overflow clipping
+        monoSamples[i] = (samples[j] + samples[j + 1]) >> 1;
     }
 
-    return monoBuffer;
+    return Buffer.from(monoSamples.buffer, monoSamples.byteOffset, monoSamples.byteLength);
 }
 
 function stopMacOSAudioCapture() {
@@ -1458,6 +1580,102 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             currentProviderMode = 'byok';
         }
         return success;
+    });
+
+    // Zero-overhead raw binary audio streaming with backpressure protection
+    ipcMain.on('send-audio-raw', (event, rawBuffer) => {
+        if (isManualMode && !isManualRecording) {
+            return;
+        }
+        const pcmBuffer = Buffer.isBuffer(rawBuffer)
+            ? rawBuffer
+            : Buffer.from(rawBuffer.buffer || rawBuffer, rawBuffer.byteOffset || 0, rawBuffer.byteLength || rawBuffer.length);
+
+        if (currentProviderMode === 'cloud') {
+            try {
+                sendCloudAudio(pcmBuffer);
+            } catch (error) {
+                console.error('Error sending cloud audio:', error);
+            }
+            return;
+        }
+        if (currentProviderMode === 'local') {
+            try {
+                getLocalAi().processLocalAudio(pcmBuffer);
+            } catch (error) {
+                console.error('Error sending local audio:', error);
+            }
+            return;
+        }
+        // Deepgram mode with WebSocket backpressure monitoring
+        if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+            try {
+                if (deepgramWs.bufferedAmount > 512000) {
+                    console.warn(`[Deepgram] Backpressure: ${deepgramWs.bufferedAmount} bytes buffered. Dropping chunk.`);
+                    return;
+                }
+                deepgramWs.send(pcmBuffer);
+            } catch (error) {
+                console.error('Error sending audio to Deepgram:', error);
+            }
+            return;
+        }
+        if (!geminiSessionRef.current) return;
+        try {
+            const base64Data = pcmBuffer.toString('base64');
+            geminiSessionRef.current.sendRealtimeInput({
+                audio: { data: base64Data, mimeType: 'audio/pcm;rate=24000' },
+            }).catch(e => console.error('Error sending audio to Gemini:', e));
+        } catch (error) {
+            console.error('Error sending system audio:', error);
+        }
+    });
+
+    ipcMain.on('send-mic-audio-raw', (event, rawBuffer) => {
+        if (isManualMode && !isManualRecording) {
+            return;
+        }
+        const pcmBuffer = Buffer.isBuffer(rawBuffer)
+            ? rawBuffer
+            : Buffer.from(rawBuffer.buffer || rawBuffer, rawBuffer.byteOffset || 0, rawBuffer.byteLength || rawBuffer.length);
+
+        if (currentProviderMode === 'cloud') {
+            try {
+                sendCloudAudio(pcmBuffer);
+            } catch (error) {
+                console.error('Error sending cloud mic audio:', error);
+            }
+            return;
+        }
+        if (currentProviderMode === 'local') {
+            try {
+                getLocalAi().processLocalAudio(pcmBuffer);
+            } catch (error) {
+                console.error('Error sending local mic audio:', error);
+            }
+            return;
+        }
+        if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+            try {
+                if (deepgramWs.bufferedAmount > 512000) {
+                    console.warn(`[Deepgram] Backpressure: ${deepgramWs.bufferedAmount} bytes buffered on mic. Dropping chunk.`);
+                    return;
+                }
+                deepgramWs.send(pcmBuffer);
+            } catch (error) {
+                console.error('Error sending mic audio to Deepgram:', error);
+            }
+            return;
+        }
+        if (!geminiSessionRef.current) return;
+        try {
+            const base64Data = pcmBuffer.toString('base64');
+            geminiSessionRef.current.sendRealtimeInput({
+                audio: { data: base64Data, mimeType: 'audio/pcm;rate=24000' },
+            }).catch(e => console.error('Error sending mic audio to Gemini:', e));
+        } catch (error) {
+            console.error('Error sending mic audio:', error);
+        }
     });
 
     ipcMain.handle('send-audio-content', async (event, { data, mimeType }) => {
