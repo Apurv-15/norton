@@ -1220,20 +1220,13 @@ function setupGeneralIpcHandlers() {
         if (process.platform !== 'darwin') {
             return { micGranted: true, screenGranted: true };
         }
-        const { systemPreferences, desktopCapturer } = require('electron');
+        const { systemPreferences } = require('electron');
         let micGranted = false;
         let screenGranted = false;
 
         if (systemPreferences && typeof systemPreferences.getMediaAccessStatus === 'function') {
             micGranted = systemPreferences.getMediaAccessStatus('microphone') === 'granted';
             screenGranted = systemPreferences.getMediaAccessStatus('screen') === 'granted';
-        }
-
-        if (!screenGranted) {
-            try {
-                const sources = await desktopCapturer.getSources({ types: ['screen'] });
-                screenGranted = sources && sources.length > 0;
-            } catch (e) {}
         }
 
         return { micGranted, screenGranted };

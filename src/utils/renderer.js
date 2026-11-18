@@ -889,16 +889,33 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
 }
 
 const MCQ_SCREENSHOT_PROMPT = `This is an MCQ exam question. Extract the question and all answer options exactly as written. Identify the correct answer. Reply with ONLY: [LETTER]) one-line reason. Nothing else.`;
-const DEFAULT_SCREENSHOT_PROMPT = `Help me on this page, give me the answer no bs, complete answer.
-If its a code/DSA question:
-- Look at the code editor in the screenshot. Find the STARTER CODE already shown — copy its exact function signature (name, parameters, return type, language syntax). Do NOT invent a different signature.
-- The language is whatever the starter code is written in (check the editor's language dropdown if visible). Never add TypeScript types to JavaScript. Never use Python syntax for Java. Match exactly.
-- Start your response with a tag like: \`[Language: JavaScript]\` or \`[Language: C++]\` etc.
-- Give the approach in 2-3 bullet points, then the COMPLETE working solution using that exact starter code as the base.
-- The code must compile and run without errors. Handle edge cases (empty input, null, large inputs).
-- Do not truncate the code.
-If its a question about the website, give me the answer no bs, complete answer.
-If its a mcq question, give me the answer no bs, complete answer.`;
+const DEFAULT_SCREENSHOT_PROMPT = `You are a real, highly experienced software engineer in a live technical interview.
+CRITICAL TONE & DELIVERY REQUIREMENTS:
+- Speak naturally and conversationally, in the first person ("I chose...", "The way I structure this...", "What I'm doing here is...").
+- Do NOT sound like an AI textbook or robotic script. No "Certainly!", no "Here is the solution:", no academic fluff.
+- Sound like an authentic, calm candidate explaining their real thought process live.
+
+IF IT'S A SQL QUESTION (e.g. DataLemur, LeetCode, StrataScratch, HackerRank, or database problem):
+1. Provide the complete, working, production-grade SQL query formatted clearly in a SQL markdown block.
+2. IMMEDIATELY BELOW THE QUERY, provide a detailed "Line-by-Line / Clause-by-Clause Explanation (Why I chose XYZ)":
+   - Explain WHY each specific clause and keyword was selected (e.g. WHY LEFT JOIN vs INNER JOIN, WHY GROUP BY, WHY HAVING vs WHERE).
+   - If using window functions (e.g. DENSE_RANK, ROW_NUMBER, LAG, LEAD), explain exactly WHY that window function was chosen over others.
+   - Explain any date arithmetic, NULL handling (COALESCE/IFNULL), or CTEs (WITH clause) so I can defend every single line if grilled by the interviewer.
+
+IF IT'S A CODE / DSA PROBLEM (e.g. LeetCode, CodeSignal, editor):
+1. Look at the code editor in the screenshot. Match the exact STARTER CODE function signature (language, name, parameters, return type). Do NOT invent a different signature.
+2. Start with a language tag like \`[Language: Python]\` or \`[Language: Java]\`.
+3. Provide the COMPLETE, 100% runnable, error-free code (handling all edge cases: null, empty, bounds).
+4. IMMEDIATELY BELOW THE CODE, provide:
+   - "Line-by-Line / Step-by-Step Explanation (Why I chose XYZ)": Walk through the key lines and justify WHY this data structure (e.g. why HashMap vs Array, why Two Pointers vs Nested Loop) and WHY this logic was used.
+   - TC (Time Complexity) & SC (Space Complexity) with a one-line spoken justification.
+
+IF IT'S AN MCQ QUESTION:
+- Reply with ONLY: [LETTER]) one-line direct reason. Nothing else.
+
+IF IT'S A GENERAL SCREEN / SYSTEM DESIGN QUESTION:
+- Provide the direct, complete answer without fluff, structured for clear spoken delivery.`;
+
 function getManualScreenshotPrompt() {
     return window.currentAppMode === 'mcq' ? MCQ_SCREENSHOT_PROMPT : DEFAULT_SCREENSHOT_PROMPT;
 }
@@ -910,20 +927,26 @@ async function captureManualScreenshot(imageQuality = null) {
     }
     _screenshotInFlight = true;
 
-    console.log('Manual screenshot triggered');
+    console.log('Manual stealth screenshot triggered');
     const quality = imageQuality || currentImageQuality;
 
     try {
-        console.log('Triggering silent screen OCR...');
         cheatingDaddy.setStatus('Analyzing Screen...');
 
-        const ocrResult = await ipcRenderer.invoke('capture-screen-ocr');
-        if (ocrResult.success && ocrResult.text && ocrResult.text.trim().length > 0) {
-            console.log('OCR text extracted successfully:', ocrResult.text.length, 'characters');
+        // Step 1: Attempt native silent OCR (zero screen recording indicator, extracts text directly)
+        let ocrText = null;
+        try {
+            const ocrResult = await ipcRenderer.invoke('capture-screen-ocr');
+            if (ocrResult && ocrResult.success && ocrResult.text && ocrResult.text.trim().length >= 25) {
+                ocrText = ocrResult.text.trim();
+            }
+        } catch (e) {
+            console.warn('Silent OCR attempt error:', e.message);
+        }
 
-            // Format prompt with OCR text context
-            const fullPrompt = `${getManualScreenshotPrompt()}\n\n[Extracted Screen Text Context]:\n${ocrResult.text.trim()}`;
-
+        if (ocrText) {
+            console.log('Silent OCR extracted screen text:', ocrText.length, 'characters');
+            const fullPrompt = `${getManualScreenshotPrompt()}\n\n[Extracted Screen Text Context]:\n${ocrText}`;
             const textResult = await sendTextMessage(fullPrompt);
             _screenshotInFlight = false;
 
@@ -933,143 +956,38 @@ async function captureManualScreenshot(imageQuality = null) {
                 console.error('Failed to submit OCR prompt:', textResult.error);
                 cheatingDaddy.addNewResponse(`Error submitting text prompt: ${textResult.error}`);
             }
-        } else {
-            console.warn('OCR returned empty text or failed, falling back to screen capture...', ocrResult.error || '');
-
-            // Fallback 1: Stealth / Native screen capture (works on macOS without web mediaStream, and as system fallback)
-            let sentNative = false;
-            try {
-                const nativeRes = await ipcRenderer.invoke('capture-screen-native', quality);
-                if (nativeRes.success && nativeRes.data) {
-                    console.log('Sending native captured screen to vision model...');
-                    const result = await ipcRenderer.invoke('send-image-content', {
-                        data: nativeRes.data,
-                        prompt: getManualScreenshotPrompt(),
-                    });
-                    _screenshotInFlight = false;
-                    sentNative = true;
-
-                    if (result.success) {
-                        console.log(`Image response completed from ${result.model || 'provider'}`);
-                    } else {
-                        console.error('Failed to get image response:', result.error);
-                        cheatingDaddy.addNewResponse(`Error: ${result.error}`);
-                    }
-                }
-            } catch (nativeErr) {
-                console.warn('Native screenshot capture failed, checking mediaStream fallback:', nativeErr);
-            }
-
-            if (sentNative) {
-                return;
-            }
-
-            // Fallback 2: Browser mediaStream if active (Linux/Windows)
-            if (mediaStream) {
-                // Lazy init of video element
-                if (!hiddenVideo) {
-                    hiddenVideo = document.createElement('video');
-                    hiddenVideo.srcObject = mediaStream;
-                    hiddenVideo.muted = true;
-                    hiddenVideo.playsInline = true;
-                    await hiddenVideo.play();
-
-                    await new Promise(resolve => {
-                        if (hiddenVideo.readyState >= 2) return resolve();
-                        hiddenVideo.onloadedmetadata = () => resolve();
-                    });
-
-                    // Lazy init of canvas based on video dimensions
-                    offscreenCanvas = document.createElement('canvas');
-                    offscreenCanvas.width = hiddenVideo.videoWidth;
-                    offscreenCanvas.height = hiddenVideo.videoHeight;
-                    offscreenContext = offscreenCanvas.getContext('2d');
-                }
-
-                // Check if video is ready
-                if (hiddenVideo.readyState < 2) {
-                    console.warn('Video not ready yet, skipping screenshot');
-                    _screenshotInFlight = false;
-                    return;
-                }
-
-                // Downscale to max 1280px wide for faster transfer
-                const MAX_WIDTH = 1280;
-                const srcW = hiddenVideo.videoWidth;
-                const srcH = hiddenVideo.videoHeight;
-                let destW = srcW;
-                let destH = srcH;
-                if (srcW > MAX_WIDTH) {
-                    destW = MAX_WIDTH;
-                    destH = Math.round(srcH * (MAX_WIDTH / srcW));
-                }
-                offscreenCanvas.width = destW;
-                offscreenCanvas.height = destH;
-                offscreenContext.drawImage(hiddenVideo, 0, 0, destW, destH);
-
-                let qualityValue;
-                switch (quality) {
-                    case 'high':
-                        qualityValue = 0.85;
-                        break;
-                    case 'medium':
-                        qualityValue = 0.6;
-                        break;
-                    case 'low':
-                        qualityValue = 0.4;
-                        break;
-                    default:
-                        qualityValue = 0.6;
-                }
-
-                offscreenCanvas.toBlob(
-                    async blob => {
-                        if (!blob) {
-                            console.error('Failed to create blob from canvas');
-                            _screenshotInFlight = false;
-                            return;
-                        }
-
-                        const reader = new FileReader();
-                        reader.onloadend = async () => {
-                            const base64data = reader.result.split(',')[1];
-
-                            if (!base64data || base64data.length < 100) {
-                                console.error('Invalid base64 data generated');
-                                _screenshotInFlight = false;
-                                return;
-                            }
-
-                            console.log(`Sending image: ${destW}x${destH}, ~${Math.round(base64data.length / 1024)}KB`);
-
-                            const result = await ipcRenderer.invoke('send-image-content', {
-                                data: base64data,
-                                prompt: getManualScreenshotPrompt(),
-                            });
-                            _screenshotInFlight = false;
-
-                            if (result.success) {
-                                console.log(`Image response completed from ${result.model}`);
-                            } else {
-                                console.error('Failed to get image response:', result.error);
-                                cheatingDaddy.addNewResponse(`Error: ${result.error}`);
-                            }
-                        };
-                        reader.readAsDataURL(blob);
-                    },
-                    'image/jpeg',
-                    qualityValue
-                );
-            } else {
-                console.error('No screenshot mechanism succeeded');
-                _screenshotInFlight = false;
-                cheatingDaddy.addNewResponse('Failed to capture screen: No screen capture source available');
-            }
+            return;
         }
-    } catch (ocrError) {
-        console.error('Error during screen capture / analysis:', ocrError);
+
+        // Step 2: Native Stealth Screenshot (bypasses browser mediaStream / screen share permission prompts completely)
+        console.log('OCR text sparse or empty, capturing clean stealth screenshot...');
+        let captureRes = await ipcRenderer.invoke('capture-clean-screenshot', quality);
+        if (!captureRes || !captureRes.success || !captureRes.data) {
+            captureRes = await ipcRenderer.invoke('capture-screen-native', quality);
+        }
+
+        if (captureRes && captureRes.success && captureRes.data) {
+            console.log('Sending clean stealth screenshot to vision model...');
+            const result = await ipcRenderer.invoke('send-image-content', {
+                data: captureRes.data,
+                prompt: getManualScreenshotPrompt(),
+            });
+            _screenshotInFlight = false;
+
+            if (result.success) {
+                console.log(`Image response completed from ${result.model || 'provider'}`);
+            } else {
+                console.error('Failed to get image response:', result.error);
+                cheatingDaddy.addNewResponse(`Error: ${result.error}`);
+            }
+            return;
+        }
+
+        throw new Error(captureRes ? captureRes.error : 'Failed to capture stealth screenshot');
+    } catch (err) {
+        console.error('Stealth screen analysis error:', err);
         _screenshotInFlight = false;
-        cheatingDaddy.addNewResponse(`Screen analysis error: ${ocrError.message || ocrError}`);
+        cheatingDaddy.addNewResponse(`Screen analysis error: ${err.message || err}`);
     }
 }
 

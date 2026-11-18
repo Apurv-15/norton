@@ -76,16 +76,6 @@ function createWindow(sendToRenderer, geminiSessionRef) {
     mainWindowRef = mainWindow;
     applyNonActivatingPanel(mainWindow);
 
-    const { session, desktopCapturer } = require('electron');
-    session.defaultSession.setDisplayMediaRequestHandler(
-        (request, callback) => {
-            desktopCapturer.getSources({ types: ['screen'] }).then(sources => {
-                callback({ video: sources[0], audio: 'loopback' });
-            });
-        },
-        { useSystemPicker: false }
-    );
-
     mainWindow.setContentProtection(true);
     mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
