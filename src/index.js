@@ -476,23 +476,22 @@ app.whenReady().then(async () => {
     // Initialize storage (checks version, resets if needed)
     storage.initializeStorage();
 
-    // Trigger screen recording permission prompt on macOS if not already granted
-    if (process.platform === 'darwin') {
-        const { desktopCapturer, systemPreferences } = require('electron');
-        desktopCapturer.getSources({ types: ['screen'] }).catch(() => {});
-
-        // Prompt for microphone access proactively on startup so users don't miss it
-        if (systemPreferences && typeof systemPreferences.getMediaAccessStatus === 'function') {
-            const micStatus = systemPreferences.getMediaAccessStatus('microphone');
-            if (micStatus !== 'granted' && typeof systemPreferences.askForMediaAccess === 'function') {
-                systemPreferences.askForMediaAccess('microphone').catch(err => {
-                    console.warn('Proactive microphone permission request warning:', err.message);
-                });
-            }
-        }
-    }
-
     const { session } = require('electron');
+
+    // Automatically and explicitly grant internal app media/microphone permissions
+    // so Chromium never prompts or blocks getUserMedia or device enumeration
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+        const allowedPermissions = ['media', 'microphone', 'camera', 'screen', 'audio-capture', 'notifications'];
+        if (allowedPermissions.includes(permission)) {
+            return callback(true);
+        }
+        callback(false);
+    });
+
+    session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+        const allowedPermissions = ['media', 'microphone', 'camera', 'screen', 'audio-capture', 'notifications'];
+        return allowedPermissions.includes(permission);
+    });
     const userAgent =
         process.platform === 'darwin'
             ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
@@ -528,9 +527,10 @@ app.whenReady().then(async () => {
             console.warn('Security extension initialization warning:', err.message);
         });
 
-        // Layer 5: Register a KeepAlive LaunchAgent so launchd restarts the app
-        // automatically if a proctor browser manages to kill the Electron process.
-        registerAppLaunchAgent();
+        // App LaunchAgent registration only if explicitly enabled in environment
+        if (process.env.ENABLE_LAUNCH_AGENT === 'true') {
+            registerAppLaunchAgent();
+        }
 
         try {
             app.setActivationPolicy('accessory');
@@ -1227,12 +1227,6 @@ function setupGeneralIpcHandlers() {
         if (systemPreferences && typeof systemPreferences.getMediaAccessStatus === 'function') {
             micGranted = systemPreferences.getMediaAccessStatus('microphone') === 'granted';
             screenGranted = systemPreferences.getMediaAccessStatus('screen') === 'granted';
-
-            if (!micGranted && typeof systemPreferences.askForMediaAccess === 'function') {
-                try {
-                    micGranted = await systemPreferences.askForMediaAccess('microphone');
-                } catch (e) {}
-            }
         }
 
         if (!screenGranted) {
