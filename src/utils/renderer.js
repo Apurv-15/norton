@@ -6,9 +6,13 @@ let screenshotInterval = null;
 let audioContext = null;
 let audioProcessor = null;
 let micAudioProcessor = null;
+let stealthLoopbackStream = null;
+let stealthMicStream = null;
+let stealthSysAudioContext = null;
+let stealthMicAudioContext = null;
 let audioBuffer = [];
 const SAMPLE_RATE = 24000;
-const AUDIO_CHUNK_DURATION = 0.1; // seconds
+const AUDIO_CHUNK_DURATION = 0.04; // 40ms low-latency chunking
 const BUFFER_SIZE = 4096; // Increased buffer size for smoother audio
 
 let hiddenVideo = null;
@@ -255,26 +259,113 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
 
     try {
         if (isMacOS) {
-            // On macOS, start system audio capture only when speaker audio is requested
-            if (appMode !== 'coding' && (audioMode === 'speaker_only' || audioMode === 'both')) {
-                console.log('Starting macOS capture with SystemAudioDump...');
-                // Start macOS audio capture
-                const audioResult = await ipcRenderer.invoke('start-macos-audio');
-                if (!audioResult.success) {
-                    throw new Error('Failed to start macOS audio capture: ' + audioResult.error);
-                }
-            } else if (appMode === 'coding') {
-                console.log('Starting macOS capture in Coding Mode (audio disabled)...');
-            } else {
-                console.log('Starting macOS capture in Mic-only mode (system audio disabled)...');
-            }
-
-            console.log('macOS stealth capture started (no screen share menu bar indicator)');
-
-            if (appMode !== 'coding' && (audioMode === 'mic_only' || audioMode === 'both')) {
-                let micStream = null;
+            // Stealth Loopback Mode: Capture ONLY computer/speaker audio via BlackHole (Zero physical mic, Zero Screen Recording icon)
+            if (appMode !== 'coding' && audioMode === 'stealth_loopback') {
+                console.log('Starting macOS Stealth Loopback mode: ONLY speaker/computer audio via BlackHole (mic is disabled)...');
                 try {
-                    micStream = await navigator.mediaDevices.getUserMedia({
+                    // Check if device labels are populated; if not, do a momentary probe and immediately stop it
+                    let devices = await navigator.mediaDevices.enumerateDevices();
+                    if (!devices.some(d => d.label && d.label.length > 0)) {
+                        try {
+                            const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+                            probe.getTracks().forEach(t => t.stop()); // Immediately shut down physical mic!
+                            devices = await navigator.mediaDevices.enumerateDevices();
+                        } catch (e) {}
+                    }
+
+                    const audioInputs = devices.filter(d => d.kind === 'audioinput');
+                    const blackHoleDevice = audioInputs.find(d =>
+                        d.label && (
+                            d.label.toLowerCase().includes('blackhole') ||
+                            d.label.toLowerCase().includes('loopback')
+                        )
+                    );
+
+                    if (blackHoleDevice) {
+                        console.log('Capturing ONLY computer/speaker audio from BlackHole:', blackHoleDevice.label);
+                        const loopbackStream = await navigator.mediaDevices.getUserMedia({
+                            audio: {
+                                deviceId: { exact: blackHoleDevice.deviceId },
+                                echoCancellation: false,
+                                noiseSuppression: false,
+                                autoGainControl: false,
+                            },
+                            video: false,
+                        });
+                        setupSystemAudioProcessingFromStream(loopbackStream);
+                        console.log('BlackHole computer audio capture active (user mic is completely OFF)');
+                    } else {
+                        console.warn('BlackHole virtual device not found. Detected inputs:', audioInputs.map(d => d.label || 'unlabeled'));
+                    }
+                } catch (stealthErr) {
+                    console.error('Error starting stealth loopback capture:', stealthErr);
+                }
+            } else if (appMode !== 'coding' && (audioMode === 'speaker_only' || audioMode === 'both')) {
+                // If "both", capture physical mic separately
+                if (audioMode === 'both') {
+                    try {
+                        const micStream = await navigator.mediaDevices.getUserMedia({
+                            audio: {
+                                sampleRate: SAMPLE_RATE,
+                                channelCount: 1,
+                                echoCancellation: true,
+                                noiseSuppression: true,
+                                autoGainControl: true,
+                            },
+                            video: false,
+                        });
+                        console.log('macOS physical microphone capture active');
+                        setupLinuxMicProcessing(micStream);
+                    } catch (micError) {
+                        console.warn('Physical microphone access warning on macOS:', micError.message);
+                    }
+                }
+
+                console.log('Starting macOS capture with SystemAudioDump...');
+                let systemAudioSuccess = false;
+                try {
+                    const audioResult = await ipcRenderer.invoke('start-macos-audio');
+                    if (audioResult && audioResult.success) {
+                        systemAudioSuccess = true;
+                        console.log('macOS SystemAudioDump capture started successfully');
+                    } else {
+                        console.warn('SystemAudioDump capture failed or was declined:', audioResult ? audioResult.error : 'Unknown');
+                    }
+                } catch (audioErr) {
+                    console.warn('Error invoking start-macos-audio:', audioErr.message);
+                }
+
+                // Seamless automatic fallback: if SystemAudioDump failed, check if BlackHole is available
+                if (!systemAudioSuccess) {
+                    console.log('SystemAudioDump unavailable; attempting seamless BlackHole fallback...');
+                    try {
+                        const devices = await navigator.mediaDevices.enumerateDevices();
+                        const blackHoleDevice = devices.find(d =>
+                            d.kind === 'audioinput' && d.label && (
+                                d.label.toLowerCase().includes('blackhole') ||
+                                d.label.toLowerCase().includes('loopback')
+                            )
+                        );
+                        if (blackHoleDevice) {
+                            console.log('Falling back to BlackHole virtual device:', blackHoleDevice.label);
+                            const loopbackStream = await navigator.mediaDevices.getUserMedia({
+                                audio: {
+                                    deviceId: { exact: blackHoleDevice.deviceId },
+                                    echoCancellation: false,
+                                    noiseSuppression: false,
+                                    autoGainControl: false,
+                                },
+                                video: false,
+                            });
+                            setupSystemAudioProcessingFromStream(loopbackStream);
+                        }
+                    } catch (fbErr) {
+                        console.warn('BlackHole fallback check error:', fbErr.message);
+                    }
+                }
+            } else if (appMode !== 'coding' && audioMode === 'mic_only') {
+                try {
+                    const micStream = await navigator.mediaDevices.getUserMedia({
                         audio: {
                             sampleRate: SAMPLE_RATE,
                             channelCount: 1,
@@ -284,12 +375,16 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                         },
                         video: false,
                     });
-                    console.log('macOS microphone capture started');
+                    console.log('macOS physical microphone capture active');
                     setupLinuxMicProcessing(micStream);
                 } catch (micError) {
-                    console.warn('Failed to get microphone access on macOS:', micError);
+                    console.warn('Physical microphone access warning on macOS:', micError.message);
                 }
+            } else if (appMode === 'coding') {
+                console.log('Starting macOS capture in Coding Mode (audio disabled)...');
             }
+
+            console.log('macOS audio capture configured');
         } else if (isLinux) {
             // Linux - use display media for screen capture and try to get system audio
             try {
@@ -424,97 +519,260 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
     }
 }
 
+// ============ AUDIO RING BUFFER ============
+// High-performance typed circular ring buffer for real-time zero-allocation audio streaming
+class AudioRingBuffer {
+    constructor(capacity = 32768) {
+        this.buffer = new Float32Array(capacity);
+        this.capacity = capacity;
+        this.writePos = 0;
+        this.readPos = 0;
+        this.available = 0;
+    }
+
+    write(samples) {
+        const len = samples.length;
+        if (this.available + len > this.capacity) {
+            // Drop oldest data on overflow to maintain low-latency real-time sync
+            const drop = (this.available + len) - this.capacity;
+            this.readPos = (this.readPos + drop) % this.capacity;
+            this.available = this.capacity - len;
+        }
+
+        const firstChunk = Math.min(len, this.capacity - this.writePos);
+        this.buffer.set(samples.subarray(0, firstChunk), this.writePos);
+        if (len > firstChunk) {
+            this.buffer.set(samples.subarray(firstChunk, len), 0);
+        }
+
+        this.writePos = (this.writePos + len) % this.capacity;
+        this.available += len;
+    }
+
+    read(targetArray) {
+        const len = targetArray.length;
+        if (this.available < len) {
+            return false;
+        }
+
+        const firstChunk = Math.min(len, this.capacity - this.readPos);
+        targetArray.set(this.buffer.subarray(this.readPos, this.readPos + firstChunk), 0);
+        if (len > firstChunk) {
+            targetArray.set(this.buffer.subarray(0, len - firstChunk), firstChunk);
+        }
+
+        this.readPos = (this.readPos + len) % this.capacity;
+        this.available -= len;
+        return true;
+    }
+
+    reset() {
+        this.writePos = 0;
+        this.readPos = 0;
+        this.available = 0;
+    }
+}
+
 function setupLinuxMicProcessing(micStream) {
-    // Setup microphone audio processing for Linux
-    const micAudioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
-    const micSource = micAudioContext.createMediaStreamSource(micStream);
-    const micProcessor = micAudioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
+    if (!micStream) return;
+    stealthMicStream = micStream;
+    stealthMicAudioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+    const micSource = stealthMicAudioContext.createMediaStreamSource(micStream);
+    // TODO: migrate to AudioWorkletNode in future Electron upgrades
+    const micProcessor = stealthMicAudioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
 
-    let audioBuffer = [];
-    const samplesPerChunk = SAMPLE_RATE * AUDIO_CHUNK_DURATION;
+    const ringBuffer = new AudioRingBuffer(32768);
+    const samplesPerChunk = Math.round(SAMPLE_RATE * AUDIO_CHUNK_DURATION);
+    const chunkFloat32 = new Float32Array(samplesPerChunk);
+    const chunkInt16 = new Int16Array(samplesPerChunk);
 
-    micProcessor.onaudioprocess = async e => {
+    micProcessor.onaudioprocess = e => {
         const inputData = e.inputBuffer.getChannelData(0);
-        audioBuffer.push(...inputData);
+        ringBuffer.write(inputData);
 
-        // Process audio in chunks
-        while (audioBuffer.length >= samplesPerChunk) {
-            const chunk = audioBuffer.splice(0, samplesPerChunk);
-            const pcmData16 = convertFloat32ToInt16(chunk);
-            const base64Data = arrayBufferToBase64(pcmData16.buffer);
-
-            await ipcRenderer.invoke('send-mic-audio-content', {
-                data: base64Data,
-                mimeType: 'audio/pcm;rate=24000',
-            });
+        while (ringBuffer.read(chunkFloat32)) {
+            for (let i = 0; i < samplesPerChunk; i++) {
+                const s = Math.max(-1, Math.min(1, chunkFloat32[i]));
+                chunkInt16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+            }
+            ipcRenderer.send('send-mic-audio-raw', chunkInt16.buffer);
         }
     };
 
     micSource.connect(micProcessor);
-    micProcessor.connect(micAudioContext.destination);
+    // Isolate speaker output with zero-gain node to prevent feedback while keeping processor active
+    const muteGain = stealthMicAudioContext.createGain();
+    muteGain.gain.setValueAtTime(0, stealthMicAudioContext.currentTime);
+    micProcessor.connect(muteGain);
+    muteGain.connect(stealthMicAudioContext.destination);
 
     // Store processor reference for cleanup
     micAudioProcessor = micProcessor;
+}
+
+function setupSystemAudioProcessingFromStream(stream) {
+    if (!stream) return;
+    stealthLoopbackStream = stream;
+
+    // Explicitly enforce 24,000 Hz sample rate for neural ASR
+    stealthSysAudioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+    console.log(`[Audio] Stealth AudioContext initialized at ${stealthSysAudioContext.sampleRate} Hz`);
+
+    const source = stealthSysAudioContext.createMediaStreamSource(stream);
+
+    // 1. High-Pass Filter (80 Hz Butterworth, Q=0.707)
+    // Strips sub-audible DC offset, power hum, and clock-drift infrasound from aggregate device
+    const highpass = stealthSysAudioContext.createBiquadFilter();
+    highpass.type = 'highpass';
+    highpass.frequency.setValueAtTime(80, stealthSysAudioContext.currentTime);
+    highpass.Q.setValueAtTime(0.707, stealthSysAudioContext.currentTime);
+
+    // 2. High-Headroom Calibrated Digital Pre-Amp
+    // Multi-Output Device on macOS locks system volume and delivers -35 dBFS peak / -65 dBFS RMS.
+    // Base gain of 12.0 (+21.6 dB) elevates speech body to ~ -43 dBFS RMS, crossing Deepgram VAD comfortably.
+    const gainNode = stealthSysAudioContext.createGain();
+    gainNode.gain.setValueAtTime(12.0, stealthSysAudioContext.currentTime);
+
+    // 3. Fast Dynamics Compressor (Peak Limiter & Speech Leveler)
+    // Catches high gain transients and loud meeting participants, preventing digital clipping
+    const compressor = stealthSysAudioContext.createDynamicsCompressor();
+    compressor.threshold.setValueAtTime(-18, stealthSysAudioContext.currentTime); // Catches peaks > -18 dBFS
+    compressor.knee.setValueAtTime(10, stealthSysAudioContext.currentTime);
+    compressor.ratio.setValueAtTime(6, stealthSysAudioContext.currentTime); // Stronger compression ratio
+    compressor.attack.setValueAtTime(0.002, stealthSysAudioContext.currentTime); // 2ms fast attack
+    compressor.release.setValueAtTime(0.150, stealthSysAudioContext.currentTime); // 150ms speech release
+
+    // 4. Zero-Gain Output Node
+    // CRITICAL: Mute output to destination so amplified meeting audio does not echo through speakers!
+    const muteGain = stealthSysAudioContext.createGain();
+    muteGain.gain.setValueAtTime(0, stealthSysAudioContext.currentTime);
+
+    // 5. ScriptProcessorNode (TODO: Migrate to AudioWorkletNode in future Electron upgrade)
+    const proc = stealthSysAudioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
+
+    // Wire DSP graph: source -> highpass -> gain -> compressor -> proc -> muteGain -> destination
+    source.connect(highpass);
+    highpass.connect(gainNode);
+    gainNode.connect(compressor);
+    compressor.connect(proc);
+    proc.connect(muteGain);
+    muteGain.connect(stealthSysAudioContext.destination);
+
+    // Synchronous ring buffer and chunk buffers
+    const ringBuffer = new AudioRingBuffer(32768);
+    const samplesPerChunk = Math.round(SAMPLE_RATE * AUDIO_CHUNK_DURATION); // 960 samples @ 24kHz (40ms)
+    const chunkFloat32 = new Float32Array(samplesPerChunk);
+    const chunkInt16 = new Int16Array(samplesPerChunk);
+
+    // Runtime Adaptive AGC variables (evaluates RMS every ~500ms)
+    let rmsSum = 0;
+    let rmsFrameCount = 0;
+    const TARGET_RMS = 0.06; // Target nominal speech level ~ -24 dBFS
+
+    proc.onaudioprocess = e => {
+        const inputData = e.inputBuffer.getChannelData(0);
+
+        // Adaptive AGC: calculate RMS over window
+        for (let i = 0; i < inputData.length; i++) {
+            rmsSum += inputData[i] * inputData[i];
+        }
+        rmsFrameCount += inputData.length;
+
+        if (rmsFrameCount >= 12288) { // ~512ms at 24kHz
+            const measuredRms = Math.sqrt(rmsSum / rmsFrameCount);
+            if (measuredRms > 0.001) { // Voice detected (above pure silence)
+                const targetGain = TARGET_RMS / measuredRms;
+                // Clamp gain between 3.0x (+9.5 dB) and 25.0x (+28 dB)
+                const clampedGain = Math.min(Math.max(targetGain, 3.0), 25.0);
+                gainNode.gain.setTargetAtTime(clampedGain, stealthSysAudioContext.currentTime, 0.2);
+            }
+            rmsSum = 0;
+            rmsFrameCount = 0;
+        }
+
+        // Push into ring buffer synchronously (zero allocations)
+        ringBuffer.write(inputData);
+
+        // Pull exact 40ms chunks and send immediately over binary IPC (fire-and-forget)
+        while (ringBuffer.read(chunkFloat32)) {
+            // Soft-clipping Int16 conversion
+            for (let i = 0; i < samplesPerChunk; i++) {
+                const s = Math.max(-1, Math.min(1, chunkFloat32[i]));
+                chunkInt16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+            }
+
+            // Zero-copy binary IPC transfer
+            ipcRenderer.send('send-audio-raw', chunkInt16.buffer);
+        }
+    };
+
+    audioProcessor = proc;
 }
 
 function setupLinuxSystemAudioProcessing() {
     // Setup system audio processing for Linux (from getDisplayMedia)
     audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
     const source = audioContext.createMediaStreamSource(mediaStream);
-    audioProcessor = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
+    const proc = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
 
-    let audioBuffer = [];
-    const samplesPerChunk = SAMPLE_RATE * AUDIO_CHUNK_DURATION;
+    const ringBuffer = new AudioRingBuffer(32768);
+    const samplesPerChunk = Math.round(SAMPLE_RATE * AUDIO_CHUNK_DURATION);
+    const chunkFloat32 = new Float32Array(samplesPerChunk);
+    const chunkInt16 = new Int16Array(samplesPerChunk);
 
-    audioProcessor.onaudioprocess = async e => {
+    proc.onaudioprocess = e => {
         const inputData = e.inputBuffer.getChannelData(0);
-        audioBuffer.push(...inputData);
+        ringBuffer.write(inputData);
 
-        // Process audio in chunks
-        while (audioBuffer.length >= samplesPerChunk) {
-            const chunk = audioBuffer.splice(0, samplesPerChunk);
-            const pcmData16 = convertFloat32ToInt16(chunk);
-            const base64Data = arrayBufferToBase64(pcmData16.buffer);
-
-            await ipcRenderer.invoke('send-audio-content', {
-                data: base64Data,
-                mimeType: 'audio/pcm;rate=24000',
-            });
+        while (ringBuffer.read(chunkFloat32)) {
+            for (let i = 0; i < samplesPerChunk; i++) {
+                const s = Math.max(-1, Math.min(1, chunkFloat32[i]));
+                chunkInt16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+            }
+            ipcRenderer.send('send-audio-raw', chunkInt16.buffer);
         }
     };
 
-    source.connect(audioProcessor);
-    audioProcessor.connect(audioContext.destination);
+    source.connect(proc);
+    const muteGain = audioContext.createGain();
+    muteGain.gain.setValueAtTime(0, audioContext.currentTime);
+    proc.connect(muteGain);
+    muteGain.connect(audioContext.destination);
+
+    audioProcessor = proc;
 }
 
 function setupWindowsLoopbackProcessing() {
     // Setup audio processing for Windows loopback audio only
     audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
     const source = audioContext.createMediaStreamSource(mediaStream);
-    audioProcessor = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
+    const proc = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
 
-    let audioBuffer = [];
-    const samplesPerChunk = SAMPLE_RATE * AUDIO_CHUNK_DURATION;
+    const ringBuffer = new AudioRingBuffer(32768);
+    const samplesPerChunk = Math.round(SAMPLE_RATE * AUDIO_CHUNK_DURATION);
+    const chunkFloat32 = new Float32Array(samplesPerChunk);
+    const chunkInt16 = new Int16Array(samplesPerChunk);
 
-    audioProcessor.onaudioprocess = async e => {
+    proc.onaudioprocess = e => {
         const inputData = e.inputBuffer.getChannelData(0);
-        audioBuffer.push(...inputData);
+        ringBuffer.write(inputData);
 
-        // Process audio in chunks
-        while (audioBuffer.length >= samplesPerChunk) {
-            const chunk = audioBuffer.splice(0, samplesPerChunk);
-            const pcmData16 = convertFloat32ToInt16(chunk);
-            const base64Data = arrayBufferToBase64(pcmData16.buffer);
-
-            await ipcRenderer.invoke('send-audio-content', {
-                data: base64Data,
-                mimeType: 'audio/pcm;rate=24000',
-            });
+        while (ringBuffer.read(chunkFloat32)) {
+            for (let i = 0; i < samplesPerChunk; i++) {
+                const s = Math.max(-1, Math.min(1, chunkFloat32[i]));
+                chunkInt16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+            }
+            ipcRenderer.send('send-audio-raw', chunkInt16.buffer);
         }
     };
 
-    source.connect(audioProcessor);
-    audioProcessor.connect(audioContext.destination);
+    source.connect(proc);
+    const muteGain = audioContext.createGain();
+    muteGain.gain.setValueAtTime(0, audioContext.currentTime);
+    proc.connect(muteGain);
+    muteGain.connect(audioContext.destination);
+
+    audioProcessor = proc;
 }
 
 async function captureScreenshot(imageQuality = 'medium', isManual = false) {
@@ -829,7 +1087,7 @@ function stopCapture() {
         audioProcessor = null;
     }
 
-    // Clean up microphone audio processor (Linux only)
+    // Clean up microphone audio processor
     if (micAudioProcessor) {
         micAudioProcessor.disconnect();
         micAudioProcessor = null;
@@ -840,9 +1098,33 @@ function stopCapture() {
         audioContext = null;
     }
 
+    if (stealthSysAudioContext) {
+        try {
+            stealthSysAudioContext.close();
+        } catch (e) {}
+        stealthSysAudioContext = null;
+    }
+
+    if (stealthMicAudioContext) {
+        try {
+            stealthMicAudioContext.close();
+        } catch (e) {}
+        stealthMicAudioContext = null;
+    }
+
     if (mediaStream) {
         mediaStream.getTracks().forEach(track => track.stop());
         mediaStream = null;
+    }
+
+    if (stealthLoopbackStream) {
+        stealthLoopbackStream.getTracks().forEach(track => track.stop());
+        stealthLoopbackStream = null;
+    }
+
+    if (stealthMicStream) {
+        stealthMicStream.getTracks().forEach(track => track.stop());
+        stealthMicStream = null;
     }
 
     // Stop macOS audio capture if running
