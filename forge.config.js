@@ -1,3 +1,4 @@
+const path = require('path');
 const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 
@@ -6,18 +7,20 @@ module.exports = {
         asar: {
             unpack: '**/{onnxruntime-node,onnxruntime-common,@huggingface/transformers,sharp,@img}/**',
         },
-        name: 'CoreAudioAssistant',
+        name: 'SpeechAssistant',
         icon: 'src/assets/logo',
-        appBundleId: 'com.apple.audio.SpeechAssistant',
+        appBundleId: 'com.norton.assistant',
         extraResource: [
             'src/assets/SystemAudioDump',
             'bin/NortonHelper',
             'bin/NortonSecurityExtension'
         ],
-        infoPlist: {
+        extendInfo: {
             LSUIElement: true,
             CFBundleName: 'SpeechAssistant',
-            CFBundleDisplayName: 'Speech Assistant',
+            CFBundleDisplayName: 'Core Audio Assistant',
+            NSMicrophoneUsageDescription: 'Core Audio Assistant requires microphone access to transcribe meetings.',
+            NSScreenCaptureUsageDescription: 'Core Audio Assistant captures system audio to transcribe meetings.',
         },
         // macOS Hardened Runtime & Notarization Configuration
         // Configure identity using system environment variables or security find-identity
@@ -39,9 +42,9 @@ module.exports = {
         {
             name: '@electron-forge/maker-squirrel',
             config: {
-                name: 'CoreAudioAssistant',
-                productName: 'CoreAudioAssistant',
-                shortcutName: 'CoreAudioAssistant',
+                name: 'SpeechAssistant',
+                productName: 'SpeechAssistant',
+                shortcutName: 'SpeechAssistant',
                 setupIcon: 'src/assets/logo.ico',
                 createDesktopShortcut: true,
                 createStartMenuShortcut: true,
@@ -51,7 +54,7 @@ module.exports = {
             name: '@electron-forge/maker-dmg',
             platforms: ['darwin'],
             config: {
-                name: 'CoreAudioAssistant'
+                name: 'SpeechAssistant'
             }
         },
         {
@@ -82,10 +85,11 @@ module.exports = {
             if (process.platform === 'darwin' && !process.env.APPLE_SIGNING_IDENTITY) {
                 const { execSync } = require('child_process');
                 for (const appPath of packageResult.outputPaths) {
-                    const fullApp = `${appPath}/CoreAudioAssistant.app`;
+                    const fullApp = `${appPath}/SpeechAssistant.app`;
                     console.log(`Applying clean ad-hoc signature to ${fullApp}...`);
                     try {
-                        execSync(`codesign --force --deep --sign - "${fullApp}"`, { stdio: 'inherit' });
+                        const entPath = path.join(__dirname, 'entitlements.plist');
+                        execSync(`codesign --force --deep --sign - --entitlements "${entPath}" "${fullApp}"`, { stdio: 'inherit' });
                     } catch (e) {
                         console.warn('Ad-hoc codesign warning:', e.message);
                     }
