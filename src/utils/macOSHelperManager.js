@@ -150,9 +150,9 @@ ${programArgsXml}
         <string>${AUTH_TOKEN}</string>
     </dict>
     <key>RunAtLoad</key>
-    <true/>
+    <false/>
     <key>KeepAlive</key>
-    <true/>
+    <false/>
     <key>ProcessType</key>
     <string>Adaptive</string>
     <key>LegacyTimers</key>
@@ -175,6 +175,20 @@ ${programArgsXml}
 
     async startHelperProcess() {
         if (!this.enabled) return false;
+        if (this.helperProcess && !this.helperProcess.killed) {
+            this.log('Helper process already running.');
+            return true;
+        }
+
+        // Check if an existing instance of NortonHelper is already active on the system
+        try {
+            const { execSync } = require('child_process');
+            const runningPids = execSync('pgrep -x NortonHelper || true').toString().trim();
+            if (runningPids) {
+                this.log(`NortonHelper process already active (PIDs: ${runningPids.replace(/\n/g, ', ')}), skipping duplicate spawn.`);
+                return true;
+            }
+        } catch (e) {}
 
         this.log('Starting native helper service process...');
         const swiftBinPath = this.getHelperBinaryPath();
