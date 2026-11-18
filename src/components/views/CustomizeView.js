@@ -594,15 +594,18 @@ export class CustomizeView extends LitElement {
                     <div class="form-group">
                         <label class="form-label">Audio Mode</label>
                         <select class="control" .value=${this.audioMode} @change=${this.handleAudioModeSelect}>
-                            <option value="speaker_only">Speaker Only (Interviewer)</option>
+                            <option value="both">Both Speaker & Mic (Standard)</option>
+                            <option value="stealth_loopback">Stealth Loopback (BlackHole - Speaker Only, No Icon)</option>
+                            <option value="speaker_only">Speaker Only (Interviewer - Standard)</option>
                             <option value="mic_only">Microphone Only (Me)</option>
-                            <option value="both">Both Speaker and Microphone</option>
                         </select>
                     </div>
                     ${
-                        this.audioMode !== 'speaker_only'
+                        this.audioMode === 'stealth_loopback'
                             ? html`
-                                  <div class="warning-callout">May cause unexpected behavior. Only change this if you know what you're doing.</div>
+                                  <div class="warning-callout" style="border-left-color: #22c55e; color: #86efac; background: rgba(34, 197, 94, 0.1);">
+                                      Stealth Loopback active: Captures ONLY computer/meeting audio via BlackHole. Your physical microphone is completely disabled and there is zero screen recording icon.
+                                  </div>
                               `
                             : ''
                     }
