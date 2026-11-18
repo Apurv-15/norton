@@ -1090,6 +1090,7 @@ export class CheatingDaddyApp extends LitElement {
             const { ipcRenderer } = window.require('electron');
             ipcRenderer.on('new-response', (_, response) => this.addNewResponse(response));
             ipcRenderer.on('update-response', (_, response) => this.updateCurrentResponse(response));
+            ipcRenderer.on('rollback-speculative-response', () => this.rollbackSpeculativeResponse());
             ipcRenderer.on('update-status', (_, status) => this.setStatus(status));
             ipcRenderer.on('click-through-toggled', (_, isEnabled) => {
                 this._isClickThrough = isEnabled;
@@ -1117,6 +1118,7 @@ export class CheatingDaddyApp extends LitElement {
             const { ipcRenderer } = window.require('electron');
             ipcRenderer.removeAllListeners('new-response');
             ipcRenderer.removeAllListeners('update-response');
+            ipcRenderer.removeAllListeners('rollback-speculative-response');
             ipcRenderer.removeAllListeners('update-status');
             ipcRenderer.removeAllListeners('click-through-toggled');
             ipcRenderer.removeAllListeners('reconnect-failed');
@@ -1270,23 +1272,48 @@ export class CheatingDaddyApp extends LitElement {
         }
     }
 
-    addNewResponse(response) {
+    addNewResponse(response, isSpeculative = false) {
         const wasOnLatest = this.currentResponseIndex === this.responses.length - 1;
         this.responses = [...this.responses, response];
         if (wasOnLatest || this.currentResponseIndex === -1) {
             this.currentResponseIndex = this.responses.length - 1;
         }
         this._awaitingNewResponse = false;
+        this._pendingUpdateResponse = null;
+        this._isCurrentSpeculative = isSpeculative;
         this.requestUpdate();
     }
 
-    updateCurrentResponse(response) {
-        if (this.responses.length > 0) {
-            this.responses = [...this.responses.slice(0, -1), response];
-        } else {
-            this.addNewResponse(response);
+    rollbackSpeculativeResponse() {
+        this._pendingUpdateResponse = null;
+        if (this._isCurrentSpeculative && this.responses.length > 0) {
+            // Remove speculative aborted turn
+            this.responses = this.responses.slice(0, -1);
+            this.currentResponseIndex = this.responses.length - 1;
+            this._isCurrentSpeculative = false;
+            this.requestUpdate();
         }
-        this.requestUpdate();
+    }
+
+    updateCurrentResponse(response) {
+        this._pendingUpdateResponse = response;
+        if (!this._rafUpdateScheduled) {
+            this._rafUpdateScheduled = true;
+            requestAnimationFrame(() => {
+                this._rafUpdateScheduled = false;
+                if (this._pendingUpdateResponse !== null && this._pendingUpdateResponse !== undefined) {
+                    const text = this._pendingUpdateResponse;
+                    this._pendingUpdateResponse = null;
+                    if (this.responses.length > 0) {
+                        this.responses = [...this.responses.slice(0, -1), text];
+                    } else {
+                        this.responses = [text];
+                        this.currentResponseIndex = 0;
+                    }
+                    this.requestUpdate();
+                }
+            });
+        }
     }
 
     // ── Navigation ──
@@ -1338,19 +1365,12 @@ export class CheatingDaddyApp extends LitElement {
         const prefs = await cheatingDaddy.storage.getPreferences();
         const providerMode = prefs.providerMode || 'byok';
 
-        // Pre-flight permission verification on macOS
+        // Pre-flight permission verification on macOS (non-blocking diagnostic check)
         if (window.require) {
             const { ipcRenderer } = window.require('electron');
             try {
                 const perms = await ipcRenderer.invoke('check-permissions-status');
-                if (perms && !perms.micGranted && (prefs.audioMode === 'both' || prefs.audioMode === 'mic_only')) {
-                    alert(
-                        'Microphone Permission Required:\n\n' +
-                        'Norton needs Microphone access to hear you speak.\n\n' +
-                        'Please allow Microphone access in System Settings > Privacy & Security > Microphone.'
-                    );
-                    await ipcRenderer.invoke('open-privacy-settings', 'microphone');
-                }
+                console.log('Pre-flight media permission status:', perms);
             } catch (permErr) {
                 console.warn('Permission verification error:', permErr);
             }
